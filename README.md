@@ -6,14 +6,16 @@ Alpha version, DO NOT USE IN PRODUCTION
 # Content:
 
 	Customized version of pg_stat_statements, implementing many Oracle like features:
-		- queryid based on normalized sql text,
-		- planid based on normalized explain text,
-		- first_call, last_call information for each entry,
-		- explain text saved in logs,
-		- queryid available in pg_stat_activity
-		- specific wait events for planing and extension activities 
+		- queryid is based on normalized sql text,
+		- query text is not normalized (but a SQL function is provided to do so),
+		- planid is based on normalized explain text,
+		- first_call, last_call informations are kept for each entry,
+		- explain text is saved in logs,
+		- queryid is available in pg_stat_activity for each pid,
+		- includes specific wait events for planing and extension activities,
+		- ...
 
-	Some ideas where found in other postgres extensions like pg_store_plans, 
+	Some ideas where found in other postgres extensions like pg_store_plans, pg_stat_plans
 	auto_explain, ... and patches from pgsql-hackers mailing list.
 
 
