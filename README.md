@@ -1,6 +1,5 @@
 # pg_stat_sql_plans
-This is a postgresql extension based on pg_stat_statements, auto_explain, pg_store_plans 
-making it close to Oracle v$sql or v$sql_plan views
+pg_stat_sql_plans is a PostgreSQL extension created from pg_stat_statements to add a planid making it close to Oracle v$sql or v$sql_plan views.
 
 Alpha version, DO NOT USE IN PRODUCTION
 
@@ -55,7 +54,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 	plan_time
 		not used yet
 	exec_time
-		execute time found in pg_stat_ssql_plans extension.
+		execute time found in pg_stat_sql_plans extension.
 	pgss_time
 		time spent in pgssp_store function (including planid calculation)
 	...
@@ -91,6 +90,9 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 
 # Additionnal Functions:
+        - pg_stat_sql_plans_reset()
+		to reset all entries.
+	
 	- pgssp_normalize_query(text)
 		replace litérals and numerics per ?
 
