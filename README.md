@@ -1,5 +1,5 @@
 # pg_stat_sql_plans
-pg_stat_sql_plans is a PostgreSQL extension created from pg_stat_statements to add a planid making it close to Oracle v$sql or v$sql_plan views.
+pg_stat_sql_plans is a PostgreSQL extension created from pg_stat_statements to add a planid column making it closer to Oracle V$SQL view.
 
 Alpha version, DO NOT USE IN PRODUCTION
 
