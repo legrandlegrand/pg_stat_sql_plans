@@ -9,8 +9,9 @@ Alpha version, DO NOT USE IN PRODUCTION
 		- queryid is based on normalized sql text,
 		- query text is not normalized (but a SQL function is provided to do so),
 		- planid is based on normalized explain text,
-		- first_call, last_call informations are kept for each entry,
 		- explain text is saved in logs,
+		- first_call, last_call informations are kept for each entry,
+		- contains duration of queries not finished in success (timeout, error, cancelled, ...),
 		- queryid is available in pg_stat_activity for each pid,
 		- includes specific wait events for planing and extension activities,
 		- ...
