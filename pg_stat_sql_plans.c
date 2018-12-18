@@ -13,7 +13,7 @@
  * recognized as equivalent, and are tracked as a single entry.  This is
  * particularly useful for non-prepared queries.
  *
- * To save on shared memory, and to avoid having to truncate oversized query 
+ * To save on shared memory, and to avoid having to truncate oversized query
  * strings, we store these strings in a temporary external query-texts file.
  * Offsets into this file are kept in shared memory.
  *
@@ -372,7 +372,7 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
-							 
+
 	DefineCustomBoolVariable("pg_stat_sql_plans.track_errors",
 							 "Selects whether statements in error are tracked by pg_stat_sql_plans.",
 							 NULL,
@@ -485,7 +485,7 @@ pgssp_shmem_startup(void)
 	int			buffer_size;
 	char	   *buffer = NULL;
 	int 		size;
-	
+
 	if (prev_shmem_startup_hook)
 		prev_shmem_startup_hook();
 
@@ -859,7 +859,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 			querytext++, query_location++, query_len--;
 		while (query_len > 0 && scanner_isspace(querytext[query_len - 1]))
 			query_len--;
-		
+
 		/* store queryid, hash query or utility statement text */
 		if (query->utilityStmt) {
 			ProcEntryArray[i].queryid =  pgssp_hash_string(querytext, query_len);
@@ -891,7 +891,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 	 */
 	if (query->queryId == UINT64CONST(0))
 		query->queryId = UINT64CONST(1);
-	
+
 }
 
   /*
@@ -908,7 +908,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 //		pgstat_report_wait_start(0x0B010000U); // gives ???-unknown wait event
 	 	pgstat_report_wait_start(0x050E0000U); // gives Activity-unknown wait event
 
- 
+
 		nested_level++;
  		PG_TRY();
  		{
@@ -924,7 +924,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
  			PG_RE_THROW();
  		}
  		PG_END_TRY();
- 
+
 		pgstat_report_wait_end();
  	}
  	else
@@ -934,7 +934,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
  		else
  			result = standard_planner(parse, cursorOptions, boundParams);
  	}
- 
+
  	return result;
  }
 
@@ -1043,14 +1043,14 @@ static void
 pgssp_ExecutorEnd(QueryDesc *queryDesc)
 {
 	uint64		queryId = queryDesc->plannedstmt->queryId;
-	
+
 	if (queryId != UINT64CONST(0) && queryDesc->totaltime && pgssp_enabled())
 	{
 		/*
 		 * Make sure stats accumulation is done.  (Note: it's okay if several
 		 * levels of hook all do this.)
 		 */
-			
+
 		InstrEndLoop(queryDesc->totaltime);
 
 		pgssp_store(queryDesc->sourceText,
@@ -1154,14 +1154,14 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				INSTR_TIME_SUBTRACT(bufusage.blk_read_time, bufusage_start.blk_read_time);
 				bufusage.blk_write_time = pgBufferUsage.blk_write_time;
 				INSTR_TIME_SUBTRACT(bufusage.blk_write_time, bufusage_start.blk_write_time);
-				
+
 			pgssp_store(queryString,
 					   0,	/* signal that it's a utility stmt */
 						NULL,
 					   pstmt->stmt_location,
 					   pstmt->stmt_len,
 					   INSTR_TIME_GET_MILLISEC(duration),
-					   0, 	/* rows */ 
+					   0, 	/* rows */
 					   &bufusage);
 			};
 			nested_level--;
@@ -1261,7 +1261,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	uint64 planId;
 	INSTR_TIME_SET_CURRENT(start);
 	pgstat_report_wait_start(PG_WAIT_EXTENSION);
-	
+
 	Assert(query != NULL);
 
 	/* Safety check... */
@@ -1307,14 +1307,14 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	{
 		queryId = pgssp_hash_string(query, query_len);
 		planId = UINT64CONST(0);
-	}	
+	}
 	else
 	{
 		/* Build planid */
 		if (pgssp_track_planid)
 		{
 			/* this part comes from auto_explain, to be implemented later */
-			
+
 //			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
 //			es->verbose = auto_explain_log_verbose;
 //			es->buffers = (es->analyze && auto_explain_log_buffers);
@@ -1344,9 +1344,9 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 
 			planId = hash_query(es->str->data);
 		}
-		else 
+		else
 			planId = UINT64CONST(1);
-    }	
+    }
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();
 	key.dbid = MyDatabaseId;
@@ -1396,14 +1396,14 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		/* If we failed to write to the text file, give up */
 		if (!stored)
 			goto done;
-		
+
 		/* OK to create a new hashtable entry */
 		entry = entry_alloc(&key, query_offset, query_len, encoding);
 
 		/* If needed, perform garbage collection while exclusive lock held */
 		if (do_gc)
 			gc_qtexts();
-		
+
 		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && pgssp_explain)
 		{
 			/*
@@ -1431,7 +1431,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		if (e->counters.calls == 0)
 		{
 			e->counters.first_call = GetCurrentTimestamp();
-		}	
+		}
 
 
 		/* add pgssp_store function duration to total_time */
@@ -1439,10 +1439,10 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
 
-		e->counters.exec_time += total_time; 
+		e->counters.exec_time += total_time;
 		e->counters.pgssp_time += INSTR_TIME_GET_MILLISEC(duration);
 		total_time = total_time + INSTR_TIME_GET_MILLISEC(duration);
-		
+
 		e->counters.calls += 1;
 		e->counters.total_time += total_time ;
 		if (e->counters.calls == 1)
@@ -1963,7 +1963,7 @@ entry_dealloc(void)
 	 * cur_median_usage includes the entries we're about to zap.
 	 */
 
-	
+
 	entries = palloc(hash_get_num_entries(pgssp_hash) * sizeof(pgsspEntry *));
 
 	i = 0;
@@ -2002,11 +2002,11 @@ entry_dealloc(void)
 	}
 
 	pfree(entries);
-	
+
 	/* trace when evicting entries, if appening too often this can slow queries ...
 	 * increasing pg_stat_sql_plans.max value could help */
 	 ereport(LOG,
-		(errmsg("pg_stat_sql_plans evicting %d entries", nvictims),	 
+		(errmsg("pg_stat_sql_plans evicting %d entries", nvictims),
 		errhidecontext(true), errhidestmt(true)));
 
 }
@@ -2525,7 +2525,7 @@ norm_yylex(char *str, core_YYSTYPE *yylval, YYLTYPE *yylloc, core_yyscan_t yysca
 		return -1;
 	}
 	PG_END_TRY();
-	
+
 	/*
 	 * '?' alone is assumed to be an IDENT.  If there's a real
 	 * operator '?', this should be confused but there's hardly be.
@@ -2590,7 +2590,7 @@ normalize_expr(char *expr, bool preserve_space)
 		if (lastloc >= 0)
 		{
 			int i, i2;
-			
+
 			/* Skipping preceding whitespaces */
 			for(i = lastloc ; i < start && IS_WSCHAR(expr[i]) ; i++);
 
@@ -2623,7 +2623,7 @@ normalize_expr(char *expr, bool preserve_space)
 			 */
 			if (tok > 0 &&
 				i2 < start &&
-				(preserve_space || 
+				(preserve_space ||
 				 (tok >= IDENT && lasttok >= IDENT &&
 				  !IS_CONST(tok) && !IS_CONST(lasttok))))
 				*wp++ = ' ';
@@ -2644,7 +2644,7 @@ normalize_expr(char *expr, bool preserve_space)
 		 */
 		if (tok == '-')
 			tok = norm_yylex(expr, &yylval, &yylloc, yyscanner);
-		
+
 		/* Exit on parse error. */
 		if (tok < 0)
 		{
@@ -2655,7 +2655,7 @@ normalize_expr(char *expr, bool preserve_space)
 		if (IS_CONST(tok))
 		{
 			YYLTYPE end;
-			
+
 			tok = norm_yylex(expr, &yylval, &end, yyscanner);
 
 			/* Exit on parse error. */
@@ -2676,7 +2676,7 @@ normalize_expr(char *expr, bool preserve_space)
 				end++;
 			}
 
-			while (expr[end - 1] == ' ') end--;			
+			while (expr[end - 1] == ' ') end--;
 
 			*wp++ = '?';
 			yylloc = end;
