@@ -34,17 +34,17 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 	queryid
 		hash value of normalized query text (using pgssp_normalize_query(text))
-		Queryid is constant between different environments, and doen't change 
+		Queryid is constant between different environments, and doen't change
 		after object recreation (after drop create or dump/restore)
 
 	planid
 		hash value of normalized plan text (using pgssp_normalize_query(text))
-		verbose OFF, may be changed in verbose ON to display objects schemas 
+		verbose OFF, may be changed in verbose ON to display objects schemas
 		Default	values:
-        0 for utility statement, 
+        0 for utility statement,
         1 when track_planid = false ,
         765585858645765476 when track_planid = true
-		
+
 	query
 		text (not normalized, with constant values) of the first query for stored
 		(queryid, planid). This text can be reused to generate explain plans or
@@ -63,65 +63,65 @@ Alpha version, DO NOT USE IN PRODUCTION
 	...
 
 	first_call
-		first occurence date of the line 
+		first occurence date of the line
 	last_call
-		latest occurence date of the line 
+		latest occurence date of the line
 
-		
-# Parameters (GUC): 
+
+# Parameters (GUC):
 	(*) means default value:
 
 	pg_stat_sql_plans.explain true, false (*)
 		write the plan in log file (as auto_explain) for new queries queryid/planid
 
 	pg_stat_sql_plans.max 5000 (*)
-	pg_stat_sql_plans.save true (*), false 
+	pg_stat_sql_plans.save true (*), false
 	pg_stat_sql_plans.track top (*), all, none
 
-	pg_stat_sql_plans.track_errors true, false (*) 
+	pg_stat_sql_plans.track_errors true, false (*)
 		include duration of queries not finished in success (timeout, error, cancelled, ...)
 
 	pg_stat_sql_plans.track_planid true, false (*)
 
-	pg_stat_sql_plans.track_utility true (*), false 
+	pg_stat_sql_plans.track_utility true (*), false
 
-	 
+
 # Entries Eviction:
 	based on oldest last_call date (to be sure to keep lastest recently used entries)
 	a message is written in log file at each eviction pass like:
 		"2018-11-13 22:16:36.421 CET [5904] LOG:  pg_stat_sql_plans evicting 250 entries"
 
 
-# Additionnal Functions:
+# Additional Functions:
         - pg_stat_sql_plans_reset()
 		to reset all entries.
-	
+
 	- pgssp_normalize_query(text)
 		replace litérals and numerics per ?
 
 	- pgssp_backend_queryid(pid)
 		last queryid executed by backend, not top query like pl/pgsql, but the active one.
 		usefull for sampling wait events per process and or queryid
-		
+
 		returns 0 if no queryid found.
 
 
 # Wait events:
-	- extension event 
+	- extension event
 		event_type-event_name "Extension"-"Extension" is displayed when
 		spending time in pgssp_store function including:
-			- time to store entry, 
+			- time to store entry,
 			- planid calculation (that can be long on table with many columns),
 			- old entries eviction
-	
+
 	- planing event
 		During planning event_type-event_name  "Activity"-"unknown wait event"
 		are displayed.
 
-	
-# exemples
+
+# Examples
 	- join pg_stat_activity with pg_stat_sql_plans on (dbid,userid, queryid)
-	
+
 		SELECT
 			pgsa.datname,
 			pgsa.pid,
@@ -141,7 +141,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 		FROM
 			pg_stat_activity pgsa
 				LEFT OUTER JOIN pg_stat_sql_plans pgssp
-			 ON  pgssp_backend_queryid( pgsa.pid ) = pgssp.queryid 
+			 ON  pgssp_backend_queryid( pgsa.pid ) = pgssp.queryid
 			 AND pgsa.datid = pgssp.dbid
 			 AND pgsa.usesysid = pgssp.userid
 		WHERE pgsa.state='active'
@@ -149,10 +149,10 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 
 	- sampling wait events pg_stat_activity per queryid
-		
+
 		create table mon as
 		SELECT pid,wait_event_type,wait_event,pgssp_backend_queryid( pid ) as queryid
-			FROM pg_stat_activity 
+			FROM pg_stat_activity
 			WHERE state = 'active' and pid != pg_backend_pid()
 		;
 
@@ -164,7 +164,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 			while true
 			loop
 				INSERT into mon select pid,wait_event_type,wait_event,pgssp_backend_queryid( pid )
-					FROM pg_stat_activity 
+					FROM pg_stat_activity
 					WHERE state ='active' and pid != pg_backend_pid();
 				PERFORM pg_sleep(0.01);
 				COMMIT;
@@ -172,5 +172,3 @@ Alpha version, DO NOT USE IN PRODUCTION
 		END
 		$$
 		;
-			
-		
