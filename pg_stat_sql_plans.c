@@ -372,7 +372,7 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
-	
+
 	DefineCustomBoolVariable("pg_stat_sql_plans.track_errors",
 							 "Selects whether statements in error are tracked by pg_stat_sql_plans.",
 							 NULL,
@@ -860,7 +860,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 			querytext++, query_location++, query_len--;
 		while (query_len > 0 && scanner_isspace(querytext[query_len - 1]))
 			query_len--;
-		
+
 		/* store queryid, hash query or utility statement text */
 		if (query->utilityStmt) {
 			ProcEntryArray[i].queryid =  pgssp_hash_string(querytext, query_len);
@@ -1193,7 +1193,7 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					   pstmt->stmt_location,
 					   pstmt->stmt_len,
 					   INSTR_TIME_GET_MILLISEC(duration),
-					   0, 	/* rows */ 
+					   0, 	/* rows */
 					   &bufusage);
 			};
 			nested_level--;
@@ -1491,7 +1491,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		
 		e->counters.pgssp_time += INSTR_TIME_GET_MILLISEC(duration);
 		total_time = total_time + INSTR_TIME_GET_MILLISEC(duration);
-		
+
 		e->counters.calls += 1;
 		e->counters.total_time += total_time ;
 		if (e->counters.calls == 1)
@@ -2055,7 +2055,7 @@ entry_dealloc(void)
 	/* trace when evicting entries, if appening too often this can slow queries ...
 	 * increasing pg_stat_sql_plans.max value could help */
 	 ereport(LOG,
-		(errmsg("pg_stat_sql_plans evicting %d entries", nvictims),	 
+		(errmsg("pg_stat_sql_plans evicting %d entries", nvictims),
 		errhidecontext(true), errhidestmt(true)));
 
 }
@@ -2672,7 +2672,7 @@ normalize_expr(char *expr, bool preserve_space)
 			 */
 			if (tok > 0 &&
 				i2 < start &&
-				(preserve_space || 
+				(preserve_space ||
 				 (tok >= IDENT && lasttok >= IDENT &&
 				  !IS_CONST(tok) && !IS_CONST(lasttok))))
 				*wp++ = ' ';
