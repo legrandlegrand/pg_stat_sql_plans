@@ -52,9 +52,39 @@ LANGUAGE C STRICT VOLATILE PARALLEL SAFE;
 
 -- Register a view on the function for ease of use.
 CREATE VIEW pg_stat_sql_plans AS
-  SELECT * FROM pg_stat_sql_plans(true);
+SELECT 
+	* 
+FROM pg_stat_sql_plans(true);
+  
+create view public.pg_stat_sql_time as 
+SELECT
+	pgssp.userid,
+	pgssp.dbid,
+	pgssp.queryid,
+	count(case when pgssp.planid not in (0,-1) then pgssp.planid end )  as planid_nb,
+	STRING_AGG(case when pgssp.planid != -1 then pgssp.planid::text end , ',')  as planid_list,
+	max(pgssp.query) query,
+	sum(case when pgssp.planid = -1 then pgssp.calls end) as plan_calls,
+	sum(case when pgssp.planid != -1 then pgssp.calls end) as exec_calls,
+	sum(pgssp.plan_time) as tot_plan_time,
+	sum(pgssp.exec_time) as tot_exec_time,
+	sum(pgssp.pgss_time) as tot_pgss_time,
+	sum(pgssp.pgss_time)+sum(pgssp.exec_time)+sum(pgssp.plan_time) as tot_time,
+	sum(pgssp.plan_time)/sum(case when pgssp.planid = -1 then pgssp.calls end) as avg_plan_time,
+	sum(pgssp.exec_time)/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_exec_time,
+	sum(pgssp.pgss_time)/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_pgss_time,
+	()sum(pgssp.pgss_time)+sum(pgssp.exec_time)+sum(pgssp.plan_time))/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_time,
+	sum(pgssp.rows) as rows,
+	min(pgssp.first_call) as first_call,
+	max(pgssp.last_call) as last_call
+FROM
+	public.pg_stat_sql_plans(true) pgssp
+group by
+	pgssp.userid,
+	pgssp.dbid,
+	pgssp.queryid;
 
-GRANT SELECT ON pg_stat_sql_plans TO PUBLIC;
+GRANT SELECT ON pg_stat_sql_plans,pg_stat_sql_time TO PUBLIC;
 
 -- Don't want this to be available to non-superusers.
 REVOKE ALL ON FUNCTION pg_stat_sql_plans_reset() FROM PUBLIC;
