@@ -73,7 +73,7 @@ SELECT
 	sum(pgssp.plan_time)/sum(case when pgssp.planid = -1 then pgssp.calls end) as avg_plan_time,
 	sum(pgssp.exec_time)/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_exec_time,
 	sum(pgssp.pgss_time)/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_pgss_time,
-	()sum(pgssp.pgss_time)+sum(pgssp.exec_time)+sum(pgssp.plan_time))/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_time,
+	(sum(pgssp.pgss_time)+sum(pgssp.exec_time)+sum(pgssp.plan_time))/sum(case when pgssp.planid != -1 then pgssp.calls end) as avg_time,
 	sum(pgssp.rows) as rows,
 	min(pgssp.first_call) as first_call,
 	max(pgssp.last_call) as last_call
@@ -84,7 +84,7 @@ group by
 	pgssp.dbid,
 	pgssp.queryid;
 
-GRANT SELECT ON pg_stat_sql_plans,pg_stat_sql_time TO PUBLIC;
+GRANT SELECT ON pg_stat_sql_plans,pg_stat_sql_times TO PUBLIC;
 
 -- Don't want this to be available to non-superusers.
 REVOKE ALL ON FUNCTION pg_stat_sql_plans_reset() FROM PUBLIC;
