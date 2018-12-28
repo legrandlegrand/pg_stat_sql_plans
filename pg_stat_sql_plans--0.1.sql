@@ -56,7 +56,7 @@ SELECT
 	* 
 FROM pg_stat_sql_plans(true);
   
-create view public.pg_stat_sql_time as 
+create view public.pg_stat_sql_times as 
 SELECT
 	pgssp.userid,
 	pgssp.dbid,
