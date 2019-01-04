@@ -142,7 +142,7 @@ typedef struct Counters
 	double		sum_var_time;	/* sum of variances in execution time in msec */
 	double		plan_time;		/* total planing time, in msec */
 	double		exec_time;		/* total execution time, in msec */
-	double		pgssp_time;		/* total pgssp time, in msec */
+	double		extn_time;		/* total pgssp time, in msec */
 	int64		rows;			/* total # of retrieved or affected rows */
 	int64		shared_blks_hit;	/* # of shared buffer hits */
 	int64		shared_blks_read;	/* # of shared disk blocks read */
@@ -1489,7 +1489,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		else
 			e->counters.plan_time += total_time; 
 		
-		e->counters.pgssp_time += INSTR_TIME_GET_MILLISEC(duration);
+		e->counters.extn_time += INSTR_TIME_GET_MILLISEC(duration);
 		total_time = total_time + INSTR_TIME_GET_MILLISEC(duration);
 
 		e->counters.calls += 1;
@@ -1863,7 +1863,7 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 			values[i++] = Float8GetDatumFast(stddev);
 			values[i++] = Float8GetDatumFast(tmp.plan_time);
 			values[i++] = Float8GetDatumFast(tmp.exec_time);
-			values[i++] = Float8GetDatumFast(tmp.pgssp_time);
+			values[i++] = Float8GetDatumFast(tmp.extn_time);
 		}
 		values[i++] = Int64GetDatumFast(tmp.rows);
 		values[i++] = Int64GetDatumFast(tmp.shared_blks_hit);
