@@ -13,7 +13,7 @@
  * recognized as equivalent, and are tracked as a single entry.  This is
  * particularly useful for non-prepared queries.
  *
- * To save on shared memory, and to avoid having to truncate oversized query
+ * To save on shared memory, and to avoid having to truncate oversized query 
  * strings, we store these strings in a temporary external query-texts file.
  * Offsets into this file are kept in shared memory.
  *
@@ -142,7 +142,7 @@ typedef struct Counters
 	double		sum_var_time;	/* sum of variances in execution time in msec */
 	double		plan_time;		/* total planing time, in msec */
 	double		exec_time;		/* total execution time, in msec */
-	double		pgssp_time;		/* total pgssp time, in msec */
+	double		extn_time;		/* total pgssp time, in msec */
 	int64		rows;			/* total # of retrieved or affected rows */
 	int64		shared_blks_hit;	/* # of shared buffer hits */
 	int64		shared_blks_read;	/* # of shared disk blocks read */
@@ -748,7 +748,8 @@ pgssp_shmem_shutdown(int code, Datum arg)
 									   qbuffer, qbuffer_size);
 
 		if (qstr == NULL)
-			continue;			/* Ignore any entries with bogus texts */
+			qstr = "";
+			
 
 		if (fwrite(entry, sizeof(pgsspEntry), 1, file) != 1 ||
 			fwrite(qstr, 1, len + 1, file) != len + 1)
@@ -905,10 +906,16 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 
 	if (pgssp_enabled())
  	{
-//		pgstat_report_wait_start(0x0B010000U); // gives ???-unknown wait event
+		instr_time		start;
+		instr_time		duration;
+		BufferUsage 	bufusage;
+
+		INSTR_TIME_SET_CURRENT(start);
+		
+		//		pgstat_report_wait_start(0x0B010000U); // gives ???-unknown wait event
 	 	pgstat_report_wait_start(0x050E0000U); // gives Activity-unknown wait event
 
-
+ 
 		nested_level++;
  		PG_TRY();
  		{
@@ -924,7 +931,32 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
  			PG_RE_THROW();
  		}
  		PG_END_TRY();
-
+ 
+ 		INSTR_TIME_SET_CURRENT(duration);
+		INSTR_TIME_SUBTRACT(duration, start);
+ 		
+		bufusage.shared_blks_hit = 0;
+		bufusage.shared_blks_read = 0;
+		bufusage.shared_blks_dirtied = 0;
+		bufusage.shared_blks_written = 0;
+		bufusage.local_blks_hit = 0;
+		bufusage.local_blks_read = 0;
+		bufusage.local_blks_dirtied = 0;
+		bufusage.local_blks_written = 0;
+		bufusage.temp_blks_read = 0;
+		bufusage.temp_blks_written = 0;
+//?? à voir
+//		INSTR_TIME_SUBTRACT(bufusage.blk_read_time, bufusage.blk_read_time);
+//		INSTR_TIME_SUBTRACT(bufusage.blk_write_time, bufusage.blk_write_time);
+		pgssp_store(    "",
+						parse->queryId,
+						NULL,
+					    0,
+					    0,
+					   INSTR_TIME_GET_MILLISEC(duration),
+					   0, 	/* rows */ 
+					   &bufusage);
+					   
 		pgstat_report_wait_end();
  	}
  	else
@@ -1311,7 +1343,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	else
 	{
 		/* Build planid */
-		if (pgssp_track_planid)
+		if (pgssp_track_planid && query_len > 0)
 		{
 			/* this part comes from auto_explain, to be implemented later */
 
@@ -1321,6 +1353,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 //			es->timing = (es->analyze && auto_explain_log_timing);
 //			es->summary = es->analyze;
 //			es->format = auto_explain_log_format;
+//			es->gucs = true;
 			es->format = EXPLAIN_FORMAT_TEXT;
 
 			ExplainBeginOutput(es);
@@ -1345,8 +1378,11 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 			planId = hash_query(es->str->data);
 		}
 		else
-			planId = UINT64CONST(1);
-    }
+			if (query_len == 0)
+				planId = UINT64CONST(-1);
+			else	
+				planId = UINT64CONST(1);
+    }	
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();
 	key.dbid = MyDatabaseId;
@@ -1358,8 +1394,8 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 
 	entry = (pgsspEntry *) hash_search(pgssp_hash, &key, HASH_FIND, NULL);
 
-	/* Create new entry, if not present */
-	if (!entry)
+	/* Create new entry, at the end of execution*/
+	if (!entry && planId != UINT64CONST(-1))
 	{
 		Size		query_offset;
 		int			gc_count;
@@ -1416,6 +1452,15 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		}
 	}
 
+	/* add new entry after planning (without text) */ 
+	if (!entry && planId == UINT64CONST(-1) )
+	{
+		LWLockRelease(pgssp->lock);
+		LWLockAcquire(pgssp->lock, LW_EXCLUSIVE);
+		/* OK to create a new hashtable entry  without text */
+		entry = entry_alloc(&key, 0, 0, encoding);
+	}
+	
 	/* Increment the counts */
 	if (true)
 	{
@@ -1439,8 +1484,12 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
 
-		e->counters.exec_time += total_time;
-		e->counters.pgssp_time += INSTR_TIME_GET_MILLISEC(duration);
+		if(planId != UINT64CONST(-1))
+			e->counters.exec_time += total_time; 
+		else
+			e->counters.plan_time += total_time; 
+		
+		e->counters.extn_time += INSTR_TIME_GET_MILLISEC(duration);
 		total_time = total_time + INSTR_TIME_GET_MILLISEC(duration);
 
 		e->counters.calls += 1;
@@ -1814,7 +1863,7 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 			values[i++] = Float8GetDatumFast(stddev);
 			values[i++] = Float8GetDatumFast(tmp.plan_time);
 			values[i++] = Float8GetDatumFast(tmp.exec_time);
-			values[i++] = Float8GetDatumFast(tmp.pgssp_time);
+			values[i++] = Float8GetDatumFast(tmp.extn_time);
 		}
 		values[i++] = Int64GetDatumFast(tmp.rows);
 		values[i++] = Int64GetDatumFast(tmp.shared_blks_hit);
