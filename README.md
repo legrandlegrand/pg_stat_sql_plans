@@ -42,8 +42,8 @@ Alpha version, DO NOT USE IN PRODUCTION
 		hash value of normalized plan text (using pgssp_normalize_query(text))
 		verbose OFF, may be changed in verbose ON to display objects schemas
 		Default	values:
-       -1 for planning duration (hidden in this view but available in pg_stat_sql_plans(true),
-	0 for utility statement,
+       -1 for planning duration (hidden in this view but available in pg_stat_sql_plans(true)),
+        0 for utility statement,
         1 when track_planid = false ,
         765585858645765476 when track_planid = true
 
@@ -86,7 +86,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 	query
 	
 	plan_calls
-		number planning executions
+		number of planning executions
 		
 	exec_calls
 		number of executions
