@@ -12,6 +12,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 		- explain text is saved in logs,
 		- first_call, last_call informations are kept for each entry,
 		- contains duration of queries not finished in success (timeout, error, cancelled, ...),
+		- contains duration of planning,
 		- queryid is available in pg_stat_activity for each pid,
 		- includes specific wait events for planing and extension activities,
 		- ...
@@ -25,7 +26,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 	should be declared in postgresql.conf with shared_preload_libraries='pg_stat_sql_plans'
 
 
-# View definition:
+# View pg_stat_sql_plans definition:
 
 	userid
 		see pg_stat_statements
@@ -41,7 +42,8 @@ Alpha version, DO NOT USE IN PRODUCTION
 		hash value of normalized plan text (using pgssp_normalize_query(text))
 		verbose OFF, may be changed in verbose ON to display objects schemas
 		Default	values:
-        0 for utility statement,
+       -1 for planning duration (hidden in this view but available in pg_stat_sql_plans(true),
+	0 for utility statement,
         1 when track_planid = false ,
         765585858645765476 when track_planid = true
 
@@ -55,11 +57,11 @@ Alpha version, DO NOT USE IN PRODUCTION
 	...
 
 	plan_time
-		not used yet
+		only for planid = -1 
 	exec_time
-		execute time found in pg_stat_sql_plans extension.
-	pgss_time
-		time spent in pgssp_store function (including planid calculation)
+		execution time as found in pg_statements extension.
+	extn_time
+		time spent by extension in pgssp_store function (including planid calculation)
 	...
 
 	first_call
@@ -67,6 +69,50 @@ Alpha version, DO NOT USE IN PRODUCTION
 	last_call
 		latest occurence date of the line
 
+# View pg_stat_sql_plans_agg definition:
+	
+	userid
+	
+	dbid
+	
+	queryid
+	
+	distinct_planid 
+		number of distinct planid for this query
+		
+	planids
+		list of the planid for this query
+		
+	query
+	
+	plan_calls
+		number planning executions
+		
+	exec_calls
+		number of executions
+		
+	total_time
+		total time of planning + execution + extension
+		
+	plan_tot_time
+	exec_tot_time
+	extn_tot_time
+	
+	average_time
+		total_time / exec_calls
+		
+	plan_avg_time
+		plan_tot_time / plan_calls
+
+	exec_avg_time
+		exec_tot_time / exec_calls
+
+	extn_avg_time
+		extn_tot_time / exec_calls
+
+	rows
+	first_call
+	last_call
 
 # Parameters (GUC):
 	(*) means default value:
