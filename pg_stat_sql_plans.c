@@ -823,7 +823,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 	Assert(query->queryId == UINT64CONST(0));
 
 	/* Safety check... */
-	if (!pgssp || !pgssp_hash)
+	if (!pgssp || !pgssp_hash || || !pgss_enabled() )
 		return;
 
 	/* Update memory structure dedicated for pgssp_backend_queryid function */
