@@ -1352,8 +1352,11 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 //			es->buffers = (es->analyze && auto_explain_log_buffers);
 //			es->timing = (es->analyze && auto_explain_log_timing);
 //			es->summary = es->analyze;
-//			es->format = auto_explain_log_format;
-//			es->gucs = true;
+//			es->settings = true;
+			
+			/* COSTS off: to make overhead smaller */ 
+			es->costs = false;
+			
 			es->format = EXPLAIN_FORMAT_TEXT;
 
 			ExplainBeginOutput(es);
