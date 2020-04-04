@@ -280,7 +280,9 @@ PG_FUNCTION_INFO_V1(pgssp_backend_queryid);
 
 static void pgssp_shmem_startup(void);
 static void pgssp_shmem_shutdown(int code, Datum arg);
-static PlannedStmt *pgssp_planner(Query *parse, int cursorOptions,
+static PlannedStmt *pgssp_planner(Query *parse, 
+				 const char *query_string,
+				 int cursorOptions,
  				 ParamListInfo boundParams);
 static void pgssp_post_parse_analyze(ParseState *pstate, Query *query);
 static void pgssp_ExecutorStart(QueryDesc *queryDesc, int eflags);
@@ -900,7 +902,10 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
   */
 
  static PlannedStmt *
- pgssp_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
+ pgssp_planner(Query *parse, 
+	       const char *query_string,
+	       int cursorOptions, 
+	       ParamListInfo boundParams)
  {
  	PlannedStmt *result;
 
@@ -920,9 +925,9 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
  		PG_TRY();
  		{
  			if (prev_planner_hook)
- 				result = prev_planner_hook(parse, cursorOptions, boundParams);
+ 				result = prev_planner_hook(parse, query_string, cursorOptions, boundParams);
  			else
- 				result = standard_planner(parse, cursorOptions, boundParams);
+ 				result = standard_planner(parse, query_string, cursorOptions, boundParams);
  			nested_level--;
  		}
  		PG_CATCH();
