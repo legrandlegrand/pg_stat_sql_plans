@@ -22,7 +22,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 
 # Prerequisites:
-	Postgres version >= 11
+	Postgres version >= 13 (see other branch for pg11 and 12 compatiblility)
 	should be declared in postgresql.conf with shared_preload_libraries='pg_stat_sql_plans'
 
 
