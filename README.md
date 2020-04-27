@@ -124,10 +124,10 @@ Alpha version, DO NOT USE IN PRODUCTION
 	pg_stat_sql_plans.save true (*), false
 	pg_stat_sql_plans.track top (*), all, none
 
-	pg_stat_sql_plans.track_errors true, false (*)
+	pg_stat_sql_plans.track_errors true (*), false
 		include duration of queries not finished in success (timeout, error, cancelled, ...)
 
-	pg_stat_sql_plans.track_planid true, false (*)
+	pg_stat_sql_plans.track_planid true (*), false
 
 	pg_stat_sql_plans.track_utility true (*), false
 
