@@ -294,7 +294,7 @@ static void pgssp_ExecutorEnd(QueryDesc *queryDesc);
 static void pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					ProcessUtilityContext context, ParamListInfo params,
 					QueryEnvironment *queryEnv,
-					DestReceiver *dest, char *completionTag);
+					DestReceiver *dest, QueryCompletion *qc);
 static uint64 pgssp_hash_string(const char *str, int len);
 static void pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		   int query_location, int query_len,
@@ -435,7 +435,7 @@ _PG_init(void)
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = pgssp_shmem_startup;
 	prev_planner_hook = planner_hook;
-    planner_hook = pgssp_planner;
+	planner_hook = pgssp_planner;
 	prev_post_parse_analyze_hook = post_parse_analyze_hook;
 	post_parse_analyze_hook = pgssp_post_parse_analyze;
 	prev_ExecutorStart = ExecutorStart_hook;
@@ -484,7 +484,7 @@ pgssp_shmem_startup(void)
 	int32		num;
 	int32		pgver;
 	int32		i;
-	int			buffer_size;
+	int		buffer_size;
 	char	   *buffer = NULL;
 	int 		size;
 
@@ -825,7 +825,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 	Assert(query->queryId == UINT64CONST(0));
 
 	/* Safety check... */
-	if (!pgssp || !pgssp_hash || || !pgss_enabled() )
+	if (!pgssp || !pgssp_hash || !pgssp_enabled() )
 		return;
 
 	/* Update memory structure dedicated for pgssp_backend_queryid function */
@@ -967,9 +967,9 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
  	else
  	{
  		if (prev_planner_hook)
- 			result = prev_planner_hook(parse, cursorOptions, boundParams);
+ 			result = prev_planner_hook(parse, query_string, cursorOptions, boundParams);
  		else
- 			result = standard_planner(parse, cursorOptions, boundParams);
+ 			result = standard_planner(parse, query_string, cursorOptions, boundParams);
  	}
 
  	return result;
@@ -1113,7 +1113,7 @@ static void
 pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					ProcessUtilityContext context,
 					ParamListInfo params, QueryEnvironment *queryEnv,
-					DestReceiver *dest, char *completionTag)
+					DestReceiver *dest, QueryCompletion *qc)
 {
 	Node	   *parsetree = pstmt->utilityStmt;
 
@@ -1151,11 +1151,11 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 			if (prev_ProcessUtility)
 				prev_ProcessUtility(pstmt, queryString,
 									context, params, queryEnv,
-									dest, completionTag);
+									dest, qc);
 			else
 				standard_ProcessUtility(pstmt, queryString,
 										context, params, queryEnv,
-										dest, completionTag);
+										dest, qc);
 			nested_level--;
 		}
 		PG_CATCH();
@@ -1209,13 +1209,16 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
 
-		/* parse command tag to retrieve the number of affected rows. */
-		if (completionTag &&
-			strncmp(completionTag, "COPY ", 5) == 0)
-			rows = pg_strtouint64(completionTag + 5, NULL, 10);
-		else
-			rows = 0;
-
+		/*
+		 * Track the total number of rows retrieved or affected by
+		 * the utility statements of COPY, FETCH, CREATE TABLE AS,
+		 * CREATE MATERIALIZED VIEW and SELECT INTO.
+		 */
+		rows = (qc && (qc->commandTag == CMDTAG_COPY ||
+					   qc->commandTag == CMDTAG_FETCH ||
+					   qc->commandTag == CMDTAG_SELECT)) ?
+			qc->nprocessed : 0;
+ 
 		/* calc differences of buffer counters. */
 		bufusage.shared_blks_hit =
 			pgBufferUsage.shared_blks_hit - bufusage_start.shared_blks_hit;
@@ -1256,11 +1259,11 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		if (prev_ProcessUtility)
 			prev_ProcessUtility(pstmt, queryString,
 								context, params, queryEnv,
-								dest, completionTag);
+								dest, qc);
 		else
 			standard_ProcessUtility(pstmt, queryString,
 									context, params, queryEnv,
-									dest, completionTag);
+									dest, qc);
 	}
 }
 
