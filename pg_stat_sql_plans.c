@@ -70,6 +70,9 @@
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
+#include "pgssp_explain.h"
+
+
 
 PG_MODULE_MAGIC;
 
@@ -318,6 +321,8 @@ static void entry_reset(void);
 void normalize_expr(char *expr, bool preserve_space);
 static uint64 hash_query(const char* query);
 static procEntry *ProcEntryArray = NULL;
+
+
 
 /*
  * Module load callback
@@ -1370,7 +1375,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 			ExplainBeginOutput(es);
 
 //			ExplainQueryText(es, queryDesc);
-			ExplainPrintPlan(es, queryDesc);
+			pgssp_ExplainPrintPlan(es, queryDesc);
 //			if (es->analyze && auto_explain_log_triggers)
 //				ExplainPrintTriggers(es, queryDesc);
 			ExplainEndOutput(es);
@@ -1386,7 +1391,8 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 //				es->str->data[es->str->len - 1] = '}';
 //			}
 
-			planId = hash_query(es->str->data);
+//PLY test avec exlain ++			planId = hash_query(es->str->data);
+			planId = pgssp_hash_string(es->str->data, es->str->len);
 		}
 		else
 			if (query_len == 0)
