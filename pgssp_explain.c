@@ -3,6 +3,17 @@
  * explain.c
  *	  Explain query execution plans
  *
+ * Modified version taken from pg13devel 2020-05 (before RC1) 
+ * that only gives the Backbone of textual explain plan, 
+ * for better performances.
+ *
+ * It fixes problems seen with "perf top" with high cpu usage of 
+ *   - colname_is_unique
+ *   - hash_create from set_rtable_names
+ * all modifications are commented 
+ *   - with //PLY, 
+ *   - some procs are prefixed with pgssp_
+ * 
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
@@ -740,9 +751,9 @@ pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	Assert(queryDesc->plannedstmt != NULL);
 	es->pstmt = queryDesc->plannedstmt;
 	es->rtable = queryDesc->plannedstmt->rtable;
-	ExplainPreScanNode(queryDesc->planstate, &rels_used);
-	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
-//PLY	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
+//PLY	ExplainPreScanNode(queryDesc->planstate, &rels_used);
+//	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
+//	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
 //								es->rtable_names);
 	es->printed_subplans = NULL;
 
@@ -1702,7 +1713,8 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	/* quals, sort keys, etc */
-/* PLY
+
+/* PLY keep only explain plan backbone, as column names are not available 
 	switch (nodeTag(plan))
 	{
 		case T_IndexScan:
@@ -3376,7 +3388,7 @@ ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 						ExplainState *es)
 {
 	const char *indexname = explain_get_index_name(indexid);
-//ply	const char *indexname = "2";
+//PLY other improvement to check ?
 
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
@@ -3443,7 +3455,9 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 	char	   *refname;
 
 	rte = rt_fetch(rti, es->rtable);
-	refname = (char *) list_nth(es->rtable_names, rti - 1);
+//PLY	refname = (char *) list_nth(es->rtable_names, rti - 1);
+// modified because es->rtable_names not initialized any more for performances reason
+	refname = NULL;
 	if (refname == NULL)
 		refname = rte->eref->aliasname;
 
@@ -3461,7 +3475,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 			/* Assert it's on a real relation */
 			Assert(rte->rtekind == RTE_RELATION);
 			objectname = get_rel_name(rte->relid);
-//PLY			objectname = (char *) "";
+//PLY other improvement to check ?
 			if (es->verbose)
 				namespace = get_namespace_name(get_rel_namespace(rte->relid));
 			objecttag = "Relation Name";
@@ -3489,7 +3503,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 						Oid			funcid = funcexpr->funcid;
 
 					objectname = get_func_name(funcid);
-//ply					objectname = (char *) "7";
+//PLY other improvement to check ?
 						if (es->verbose)
 							namespace =
 								get_namespace_name(get_func_namespace(funcid));
