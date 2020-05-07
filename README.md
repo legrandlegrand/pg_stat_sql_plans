@@ -39,13 +39,16 @@ Alpha version, DO NOT USE IN PRODUCTION
 		after object recreation (after drop create or dump/restore)
 
 	planid
+		costs OFF, for performances reasons.
 		hash value of normalized plan text (using pgssp_normalize_query(text))
+		when plan_type = standard or hash value of minimized plan text (backbone) 
+		when plan_type= mini.
 		verbose OFF, may be changed in verbose ON to display objects schemas
 		Default	values:
        -1 for planning duration (hidden in this view but available in pg_stat_sql_plans(true)),
         0 for utility statement,
-        1 when track_planid = false ,
-        765585858645765476 when track_planid = true
+        1 when plan_type = none ,
+        765585858645765476 when plan_type is diferent from none
 
 	query
 		text (not normalized, with constant values) of the first query for stored
