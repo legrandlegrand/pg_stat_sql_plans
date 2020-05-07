@@ -121,13 +121,21 @@ Alpha version, DO NOT USE IN PRODUCTION
 		write the plan in log file (as auto_explain) for new queries queryid/planid
 
 	pg_stat_sql_plans.max 5000 (*)
+	pg_stat_sql_plans.plan_type mini (*), none, standard
+		mini : a customized explain plan text (only displaying the backbone), to be faster
+		none : plan is not considered planid =1,
+		standards : explain (costs off) is used (can be slow)
+		
 	pg_stat_sql_plans.save true (*), false
+	pg_stat_sql_plans.track_pid true (*), false
+		should be true to populate pgssp_backend_queryid() results
+		
 	pg_stat_sql_plans.track top (*), all, none
 
 	pg_stat_sql_plans.track_errors true (*), false
 		include duration of queries not finished in success (timeout, error, cancelled, ...)
 
-	pg_stat_sql_plans.track_planid true (*), false
+	
 
 	pg_stat_sql_plans.track_utility true (*), false
 
