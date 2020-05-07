@@ -235,7 +235,7 @@ static HTAB *pgssp_hash = NULL;
 typedef enum
 {
 	pgssp_TRACK_NONE,			/* track no statements */
-	pgssp_TRACK_TOP,				/* only top level statements */
+	pgssp_TRACK_TOP,			/* only top level statements */
 	pgssp_TRACK_ALL				/* all statements, including nested ones */
 }			pgsspTrackLevel;
 
@@ -247,12 +247,28 @@ static const struct config_enum_entry track_options[] =
 	{NULL, 0, false}
 };
 
+typedef enum
+{
+	pgssp_PLAN_NONE,		/* track no plan*/
+	pgssp_PLAN_MINI,		/* track minimal explain plans */
+	pgssp_PLAN_STD			/* track explain plans (costs off) */
+}			pgsspPlanType;
+
+static const struct config_enum_entry plan_type_options[] =
+{
+	{"none", pgssp_PLAN_NONE, false},
+	{"mini", pgssp_PLAN_MINI, false},
+	{"standard", pgssp_PLAN_STD, false},
+	{NULL, 0, false}
+};
+
 static int	pgssp_max;			/* max # statements to track */
 static int	pgssp_track;			/* tracking level */
 static bool pgssp_track_utility; /* whether to track utility commands */
 static bool pgssp_track_errors;  /* whether to track statements in error */
-static bool pgssp_track_planid; 	/* whether to track plan id */
+static int	pgssp_plan_type; 	/* how to track plan id */
 static bool pgssp_explain;	 	/* whether to explain query */
+static bool pgssp_track_pid;	 	/* whether to track collected data per pid */
 static bool pgssp_save;			/* whether to save stats across shutdown */
 
 
@@ -391,11 +407,12 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
- 	DefineCustomBoolVariable("pg_stat_sql_plans.track_planid",
-							 "Selects whether Plans are tracked by pg_stat_sql_plans.",
+	DefineCustomEnumVariable("pg_stat_sql_plans.plan_type",
+							 "Selects which type of explain plan is used by pg_stat_sql_plans.",
 							 NULL,
-							 &pgssp_track_planid,
-							 true,
+							 &pgssp_plan_type,
+							 pgssp_PLAN_MINI,
+							 plan_type_options,
 							 PGC_SUSET,
 							 0,
 							 NULL,
@@ -406,6 +423,17 @@ _PG_init(void)
 							 "Selects whether explain query by pg_stat_sql_plans.",
 							 NULL,
 							 &pgssp_explain,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("pg_stat_sql_plans.track_pid",
+							 "Selects whether data by pid are collected by pg_stat_sql_plans.",
+							 NULL,
+							 &pgssp_track_pid,
 							 false,
 							 PGC_SUSET,
 							 0,
@@ -834,7 +862,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		return;
 
 	/* Update memory structure dedicated for pgssp_backend_queryid function */
-	if (MyProc)
+	if (MyProc && pgssp_track_pid )
 	{
 		int i = MyProc - ProcGlobal->allProcs;
 		const char *querytext = pstate->p_sourcetext;
@@ -1303,7 +1331,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	instr_time	start;
 	instr_time	duration;
 	ExplainState *es = NewExplainState();
-	uint64 planId;
+	uint64 planId = UINT64CONST(0);
 	INSTR_TIME_SET_CURRENT(start);
 	pgstat_report_wait_start(PG_WAIT_EXTENSION);
 
@@ -1356,7 +1384,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	else
 	{
 		/* Build planid */
-		if (pgssp_track_planid && query_len > 0)
+		if (pgssp_plan_type != pgssp_PLAN_NONE && query_len > 0)
 		{
 			/* this part comes from auto_explain, to be implemented later */
 
@@ -1375,7 +1403,12 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 			ExplainBeginOutput(es);
 
 //			ExplainQueryText(es, queryDesc);
-			pgssp_ExplainPrintPlan(es, queryDesc);
+			if (pgssp_plan_type == pgssp_PLAN_STD )
+				ExplainPrintPlan(es, queryDesc);
+
+			if (pgssp_plan_type == pgssp_PLAN_MINI )
+				pgssp_ExplainPrintPlan(es, queryDesc);
+
 //			if (es->analyze && auto_explain_log_triggers)
 //				ExplainPrintTriggers(es, queryDesc);
 			ExplainEndOutput(es);
@@ -1391,8 +1424,11 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 //				es->str->data[es->str->len - 1] = '}';
 //			}
 
-//PLY test avec exlain ++			planId = hash_query(es->str->data);
-			planId = pgssp_hash_string(es->str->data, es->str->len);
+			if (pgssp_plan_type == pgssp_PLAN_STD )
+				planId = hash_query(es->str->data);
+
+			if (pgssp_plan_type == pgssp_PLAN_MINI )
+				planId = pgssp_hash_string(es->str->data, es->str->len);
 		}
 		else
 			if (query_len == 0)
