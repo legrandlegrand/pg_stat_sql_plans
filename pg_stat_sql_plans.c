@@ -434,7 +434,7 @@ _PG_init(void)
 							 "Selects whether data by pid are collected by pg_stat_sql_plans.",
 							 NULL,
 							 &pgssp_track_pid,
-							 true,
+							 false,
 							 PGC_SUSET,
 							 0,
 							 NULL,
@@ -986,15 +986,16 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 //?? à voir
 //		INSTR_TIME_SUBTRACT(bufusage.blk_read_time, bufusage.blk_read_time);
 //		INSTR_TIME_SUBTRACT(bufusage.blk_write_time, bufusage.blk_write_time);
-		pgssp_store(    "",
-						parse->queryId,
-						NULL,
-					    0,
-					    0,
-					   INSTR_TIME_GET_MILLISEC(duration),
-					   0, 	/* rows */ 
-					   &bufusage);
-					   
+
+
+		pgssp_store(    query_string,
+			        parse->queryId,
+	       			NULL,
+				parse->stmt_location,
+				parse->stmt_len,
+				INSTR_TIME_GET_MILLISEC(duration),
+				0, 	/* rows */ 
+				&bufusage);
 		pgstat_report_wait_end();
  	}
  	else
@@ -1381,10 +1382,12 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		queryId = pgssp_hash_string(query, query_len);
 		planId = UINT64CONST(0);
 	}
+	else if (!queryDesc)
+		planId = UINT64CONST(-1);
 	else
 	{
 		/* Build planid */
-		if (pgssp_plan_type != pgssp_PLAN_NONE && query_len > 0)
+		if (pgssp_plan_type != pgssp_PLAN_NONE)
 		{
 			/* this part comes from auto_explain, to be implemented later */
 
@@ -1409,6 +1412,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 			if (pgssp_plan_type == pgssp_PLAN_MINI )
 				pgssp_ExplainPrintPlan(es, queryDesc);
 
+
 //			if (es->analyze && auto_explain_log_triggers)
 //				ExplainPrintTriggers(es, queryDesc);
 			ExplainEndOutput(es);
@@ -1431,10 +1435,8 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 				planId = pgssp_hash_string(es->str->data, es->str->len);
 		}
 		else
-			if (query_len == 0)
-				planId = UINT64CONST(-1);
-			else	
-				planId = UINT64CONST(1);
+			/* pgssp_plan_type != pgssp_PLAN_NONE */
+			planId = UINT64CONST(1);
     }	
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();
@@ -1448,7 +1450,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	entry = (pgsspEntry *) hash_search(pgssp_hash, &key, HASH_FIND, NULL);
 
 	/* Create new entry, at the end of execution*/
-	if (!entry && planId != UINT64CONST(-1))
+	if (!entry )
 	{
 		Size		query_offset;
 		int			gc_count;
@@ -1505,14 +1507,6 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		}
 	}
 
-	/* add new entry after planning (without text) */ 
-	if (!entry && planId == UINT64CONST(-1) )
-	{
-		LWLockRelease(pgssp->lock);
-		LWLockAcquire(pgssp->lock, LW_EXCLUSIVE);
-		/* OK to create a new hashtable entry  without text */
-		entry = entry_alloc(&key, 0, 0, encoding);
-	}
 	
 	/* Increment the counts */
 	if (true)
