@@ -499,7 +499,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 }
 
 /*
- * ExplainOnePlan -
+ * pgssp_ExplainOnePlan -
  *		given a planned query, execute it if needed, and then print
  *		EXPLAIN output
  *
@@ -511,7 +511,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+pgssp_ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage)
@@ -598,7 +598,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExplainOpenGroup("Query", NULL, true, es);
 
 	/* Create textual dump of plan tree */
-	ExplainPrintPlan(es, queryDesc);
+	pgssp_ExplainPrintPlan(es, queryDesc);
 
 	if (es->summary && (planduration || bufusage))
 		ExplainOpenGroup("Planning", "Planning", true, es);

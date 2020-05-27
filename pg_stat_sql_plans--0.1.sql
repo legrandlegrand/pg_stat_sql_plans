@@ -18,9 +18,11 @@ RETURNS NULL ON NULL INPUT;
 CREATE FUNCTION pg_stat_sql_plans(IN showtext boolean,
     OUT userid oid,
     OUT dbid oid,
+    OUT qpid int8,
+    OUT query text,
     OUT queryid int8,
     OUT planid int8,
-    OUT query text,
+    OUT plans int8,
     OUT calls int8,
     OUT total_time float8,
     OUT min_time float8,
@@ -43,7 +45,7 @@ CREATE FUNCTION pg_stat_sql_plans(IN showtext boolean,
     OUT temp_blks_written int8,
     OUT blk_read_time float8,
     OUT blk_write_time float8,
-	OUT first_call timestamptz,
+    OUT first_call timestamptz,
     OUT last_call timestamptz
 )
 RETURNS SETOF record
@@ -55,32 +57,34 @@ CREATE VIEW pg_stat_sql_plans AS
 SELECT 
 	* 
 FROM pg_stat_sql_plans(true)
-WHERE planid != -1;
+;
 
 create view public.pg_stat_sql_plans_agg as 
 SELECT
 	pgssp.userid,
 	pgssp.dbid,
 	pgssp.queryid,
-	count(case when pgssp.planid not in (0,-1) then pgssp.planid end )  as distinct_planid,
-	STRING_AGG(case when pgssp.planid != -1 then pgssp.planid::text end , ',')  as planids,
+	count(case when pgssp.planid != 0 then pgssp.planid end )  as distinct_planid,
+	STRING_AGG(case when pgssp.planid != 0 then pgssp.planid::text end , ',')  as planids,
 	max(pgssp.query) query,
-	sum(case when pgssp.planid = -1 then pgssp.calls end) as plan_calls,
-	sum(case when pgssp.planid != -1 then pgssp.calls end) as exec_calls,
-	sum(pgssp.extn_time)+sum(pgssp.exec_time)+sum(pgssp.plan_time) as total_time,
-	sum(pgssp.plan_time) as plan_tot_time,
-	sum(pgssp.exec_time) as exec_tot_time,
-	sum(pgssp.extn_time) as extn_tot_time,
-	(sum(pgssp.extn_time)+sum(pgssp.exec_time)+sum(pgssp.plan_time))/sum(case when pgssp.planid != -1 then pgssp.calls end) as average_time,
-	sum(pgssp.plan_time)/sum(case when pgssp.planid = -1 then pgssp.calls end) as plan_avg_time,
-	sum(pgssp.exec_time)/sum(case when pgssp.planid != -1 then pgssp.calls end) as exec_avg_time,
-	sum(pgssp.extn_time)/sum(case when pgssp.planid != -1 then pgssp.calls end) as extn_avg_time,
+	sum(pgssp.plans) as plans,
+	sum(pgssp.calls) as calls,
+	sum(total_time) as total_time,
+	sum(pgssp.plan_time) as plan_time,
+	sum(pgssp.exec_time) as exec_time,
+	sum(pgssp.extn_time) as extn_time,
+	sum(total_time)/sum(pgssp.calls) as average_time,
+	sum(pgssp.plan_time)/sum(case when pgssp.plans = 0 then 1 else pgssp.plans end ) as plan_avg_time,
+	sum(pgssp.exec_time)/sum(pgssp.calls) as exec_avg_time,
+	sum(pgssp.extn_time)/sum(pgssp.calls) as extn_avg_time,
 	sum(pgssp.rows) as rows,
 	min(pgssp.first_call) as first_call,
 	max(pgssp.last_call) as last_call
 FROM
 	public.pg_stat_sql_plans(true) pgssp
-group by
+WHERE
+	pgssp.calls !=0
+GROUP BY
 	pgssp.userid,
 	pgssp.dbid,
 	pgssp.queryid;
@@ -90,7 +94,7 @@ GRANT SELECT ON pg_stat_sql_plans,pg_stat_sql_plans_agg TO PUBLIC;
 -- Don't want this to be available to non-superusers.
 REVOKE ALL ON FUNCTION pg_stat_sql_plans_reset() FROM PUBLIC;
 
-CREATE FUNCTION pgssp_backend_queryid(int)
+CREATE FUNCTION pgssp_backend_qpid(int)
 RETURNS int8
 AS 'MODULE_PATHNAME'
 LANGUAGE C
