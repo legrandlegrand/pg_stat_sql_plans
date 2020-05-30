@@ -1,19 +1,22 @@
 # pg_stat_sql_plans
-pg_stat_sql_plans is a PostgreSQL extension created from pg_stat_statements to add a planid column making it closer to Oracle V$SQL view.
+pg_stat_sql_plans is a PostgreSQL extension created from pg_stat_statements adding a planid column 
+generated from the hash value of the explain text.
 
 Alpha version, DO NOT USE IN PRODUCTION
 
 # Content:
 
-	Customized version of pg_stat_statements, implementing many Oracle like features:
-		- queryid is based on normalized sql text,
+	Customized version of pg_stat_statements, implementing many additionnal features:
+		- queryid is based on normalized sql text (not parse tree jumbling),
 		- stored query text is not normalized (but a SQL function is provided to do so),
 		- planid is based on normalized explain text,
+		- includes a specific 'minimal' explain module, for performances,
+		- planid is build at planning time, making it reusable by cached plans,
 		- explain text is saved in logs,
 		- first_call, last_call informations are kept for each entry,
 		- contains duration of queries that failed (timeout, error, cancelled, ...),
 		- contains duration of planning,
-		- queryid, planid are available in pg_stat_activity for each pid,
+		- expose current queryid, planid per pid in pg_stat_activity,
 		- includes specific wait events for planning and extension activities,
 		- ...
 
@@ -53,7 +56,8 @@ Alpha version, DO NOT USE IN PRODUCTION
 			costs OFF (for performances reasons),
 			verbose OFF (may be changed in verbose ON to display objects schemas)
 		Default	values:
-			0 for utility statement,
+			0 for utility statement (Optimisable one's like "CREATE TABLE AS"
+			  have a planid calculated and an explain plan like any other query) 
 			1 when plan_type = 'none'
 			765585858645765476 when plan_type = 'mini' or 'standard'
 
@@ -108,16 +112,16 @@ Alpha version, DO NOT USE IN PRODUCTION
 	extn_time
 	
 	average_time
-		total_time / exec_calls
+		total_time / calls
 		
 	plan_avg_time
-		plan_tot_time / plan_calls
+		plan_time / plans
 
 	exec_avg_time
-		exec_tot_time / exec_calls
+		exec_time / calls
 
 	extn_avg_time
-		extn_tot_time / exec_calls
+		extn_time / calls
 
 	rows
 	first_call
@@ -144,7 +148,8 @@ Alpha version, DO NOT USE IN PRODUCTION
 		include duration of failed queries (timeout, error, cancelled, ...)
 
 	pg_stat_sql_plans.track_pid true (*), false
-		enable, disable the result of pgssp_backend_qpid(pid)
+		enable, disable the result of pgssp_backend_qpid(pid), can only by changed at the db level
+		using pg_relaod_conf().
 
 	pg_stat_sql_plans.track_utility true (*), false
 
@@ -156,18 +161,18 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 
 # Additional Functions:
-        - pg_stat_sql_plans_reset()
+	- pg_stat_sql_plans_reset()
 		to reset all entries.
 
 	- pgssp_normalize_query(text)
 		replace litérals and numerics per ?
 
 	- pgssp_backend_qpid(pid)
-		resturns last qpid executed by backend, not top query like pl/pgsql, but the active one.
+		resturns last qpid executed by backend, not top query level, but the active one.
 		usefull for sampling wait events per process and or queryid, can be used to join
 		pg_stat_activity with pg_stat_sql_plans (see exemple)
 
-		returns 0 if no queryid found.
+		returns 0 if no qpid found, -1 where pg_stat_sql_plans.track_pid = false
 
 
 # Wait events:
@@ -199,8 +204,9 @@ Alpha version, DO NOT USE IN PRODUCTION
 			pgsa.wait_event,
 			pgsa.state,
 			pgsa.query,
-			pgssp_backend_qpid( pgsa.pid ),
-			pgssp.query,
+			pgssp.queryid,
+			pgssp.planid,
+			pgssp_normalize_query(pgssp.query),
 			pgssp.calls
 		FROM
 			pg_stat_activity pgsa
@@ -212,7 +218,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 		;
 
 
-	- sampling wait events pg_stat_activity per queryid
+	- sampling wait events pg_stat_activity per query plan id
 
 		create table mon as
 		SELECT pid,wait_event_type,wait_event,pgssp_backend_qpid( pid ) as queryplanid

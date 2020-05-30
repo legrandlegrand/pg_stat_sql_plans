@@ -438,7 +438,7 @@ _PG_init(void)
 							 NULL,
 							 &pgssp_track_pid,
 							 false,
-							 PGC_SUSET,
+							 PGC_SIGHUP,
 							 0,
 							 NULL,
 							 NULL,
@@ -899,13 +899,16 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		while (query_len > 0 && scanner_isspace(querytext[query_len - 1]))
 			query_len--;
 
-		/* store queryid, hash query or utility statement text */
+		/* store queryid based on utility statement text 
+		 * planned statements are updated during executor start hook
+		 * after planid calculation in planner hook
+		 */
 		if (query->utilityStmt) {
 			ProcEntryArray[i].qpid =  hash_combine64(pgssp_hash_string(querytext, query_len),UINT64CONST(0));
 //		} else {
+			
 //			ProcEntryArray[i].qpid =  hash_query(pstate->p_sourcetext);
 		}
-//PLY ??? revoir maj ProcEntry avec queryid modifié
 	}
 
 	/*
@@ -988,7 +991,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		bufusage.local_blks_written = 0;
 		bufusage.temp_blks_read = 0;
 		bufusage.temp_blks_written = 0;
-//?? à voir
+//TODO
 //		INSTR_TIME_SUBTRACT(bufusage.blk_read_time, bufusage.blk_read_time);
 //		INSTR_TIME_SUBTRACT(bufusage.blk_write_time, bufusage.blk_write_time);
 
@@ -1027,7 +1030,7 @@ pgssp_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	else
 		standard_ExecutorStart(queryDesc, eflags);
 
-	if (MyProc && pgssp_enabled() && pgssp_track_pid )
+	if (MyProc && pgssp_enabled() && pgssp_track_pid && queryDesc->plannedstmt->queryId != UINT64CONST(0))
 	{
 		int i = MyProc - ProcGlobal->allProcs;
 		ProcEntryArray[i].qpid = queryDesc->plannedstmt->queryId;
@@ -1187,7 +1190,15 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	if (pgssp_track_utility && pgssp_enabled() &&
 		!IsA(parsetree, ExecuteStmt) &&
 		!IsA(parsetree, PrepareStmt) &&
-		!IsA(parsetree, DeallocateStmt))
+		!IsA(parsetree, DeallocateStmt) &&
+// TODO exclude optimisable utility statemenents that appears 2 times otherwise
+		!IsA(parsetree, CreateTableAsStmt)
+// extend this to :
+//	create materialized view, 
+//	RefreshMatViewStmt,
+//	explain,
+//	...
+	)
 	{
 		instr_time	start;
 		instr_time	duration;
@@ -1400,7 +1411,7 @@ pgssp_store(const char *query, uint64 queryId,
 	/*
 	 * For utility statements, we just hash the query string to get an ID.
 	 */
-	if (queryId == UINT64CONST(0))
+	if (queryId == UINT64CONST(0) && !plan)
 	{
 		queryId = pgssp_hash_string(query, query_len);
 		planId = UINT64CONST(0);
@@ -1408,6 +1419,13 @@ pgssp_store(const char *query, uint64 queryId,
 	}
 	else if (plan)
 	{
+		/* specific for optimisable utility statements like CTAS ... */
+		if (queryId == UINT64CONST(0))
+		{
+			/* query text can be normalized here */
+			queryId = hash_query(query);
+		}
+
 		/* Build planid */
 		if (pgssp_plan_type == pgssp_PLAN_NONE)
 		{
@@ -1417,30 +1435,32 @@ pgssp_store(const char *query, uint64 queryId,
 		}
 		else
 		{
-			/* this part comes from auto_explain, to be implemented later */
+			/* this part comes from auto_explain
+			 * ExplainPrintPlan has been replaced by
+			 * ExplainOnePlan to be able to be calculated 
+			 * from planner hook.
+			 *
+			 *	es->verbose = true;
+			 * could help on databases with multiple schemas
+			 * having tables with the same names.
+			 *
+			 *	es->settings = true;
+			 * may help when gucs are modified per session.
+			 */
 
-//			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
-//			es->verbose = auto_explain_log_verbose;
-//			es->buffers = (es->analyze && auto_explain_log_buffers);
-//			es->timing = (es->analyze && auto_explain_log_timing);
-//			es->summary = es->analyze;
-//			es->settings = true;
 			
 			/* COSTS off: to make overhead smaller */ 
 			es->costs = false;
-			
 			es->format = EXPLAIN_FORMAT_TEXT;
 
 			ExplainBeginOutput(es);
 
 //			ExplainQueryText(es, queryDesc);
 			if (pgssp_plan_type == pgssp_PLAN_STD )
-//				ExplainPrintPlan(es, queryDesc);
 				ExplainOnePlan(plan, NULL, es, query, params,
 							NULL, NULL, NULL);
 
 			if (pgssp_plan_type == pgssp_PLAN_MINI )
-//				pgssp_ExplainPrintPlan(es, queryDesc);
 				pgssp_ExplainOnePlan(plan, NULL, es, query, params,
 							NULL, NULL, NULL);
 
@@ -1452,13 +1472,6 @@ pgssp_store(const char *query, uint64 queryId,
 			/* Remove last line break */
 			if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
 				es->str->data[--es->str->len] = '\0';
-
-			/* Fix JSON to output an object */
-//			if (auto_explain_log_format == EXPLAIN_FORMAT_JSON)
-//			{
-//				es->str->data[0] = '{';
-//				es->str->data[es->str->len - 1] = '}';
-//			}
 
 			if (pgssp_plan_type == pgssp_PLAN_STD )
 				planId = hash_query(es->str->data);
@@ -1475,14 +1488,11 @@ pgssp_store(const char *query, uint64 queryId,
 		/* execution of a planned query */
 		qpId = queryId;	
 
-//PLY ??? revoir maj ProcEntry avec queryid modifié
-
 
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();
 	key.dbid = MyDatabaseId;
 	key.qpid = qpId;
-//	key.planid = planId;
 
 	/* Lookup the hash table entry with shared lock. */
 	LWLockAcquire(pgssp->lock, LW_SHARED);
@@ -1535,7 +1545,7 @@ pgssp_store(const char *query, uint64 queryId,
 		if (do_gc)
 			gc_qtexts();
 
-		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && pgssp_explain)
+		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && planId != UINT64CONST(-1) && pgssp_explain)
 		{
 			/*
 			 * Plan is only logged one time for each queryid / planId
@@ -1559,7 +1569,10 @@ pgssp_store(const char *query, uint64 queryId,
 
 		SpinLockAcquire(&e->mutex);
 
-//ply init queryid and planid during planning or utility
+		/*
+		 * queryid and planid are initialized during planning or utility only,
+		 * not touched during execution
+		 */
 		if (plan || planId == UINT64CONST(0))
 		{
 			e->counters.queryid = queryId;
@@ -1567,7 +1580,6 @@ pgssp_store(const char *query, uint64 queryId,
 		}
 
 		/* "Unstick" entry if it was previously sticky */
-
 		if ( e->counters.plans == 0 && e->counters.calls == 0)
 		{
 			e->counters.first_call = GetCurrentTimestamp();
@@ -1595,7 +1607,7 @@ pgssp_store(const char *query, uint64 queryId,
 		total_time += INSTR_TIME_GET_MILLISEC(duration);
 
 		e->counters.total_time += total_time ;
-//		if (e->counters.calls == 1)
+//TODO		if (e->counters.calls == 1)
 //		{
 //			e->counters.min_time = total_time;
 //			e->counters.max_time = total_time;
@@ -1866,9 +1878,8 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 		int			i = 0;
 		Counters	tmp;
 		double		stddev;
+		/* qpid replaces combined key (queryid,planid) */
 		int64		qpid = entry->key.qpid;
-//		int64		queryid = entry->key.queryid;
-//		int64		planid = entry->key.planid;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
@@ -1878,12 +1889,6 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 
 		if (is_allowed_role || entry->key.userid == userid)
 		{
-//			if (api_version >= pgssp_V1_2)
-//				values[i++] = Int64GetDatumFast(queryid);
-
-//			if (api_version >= pgssp_V1_3)
-//				values[i++] = Int64GetDatumFast(planid);
-
 			if (api_version >= pgssp_V1_3)
 				values[i++] = Int64GetDatumFast(qpid);
 
@@ -2081,6 +2086,7 @@ entry_alloc(pgsspHashKey *key, Size query_offset, int query_len, int encoding)
 
 /*
  * qsort comparator for sorting into increasing usage order
+ * !!! this is a pgssp specific eviction criteria based on last_call time !!!
  */
 static int
 entry_cmp(const void *lhs, const void *rhs)
@@ -2887,15 +2893,22 @@ pgssp_normalize_query(PG_FUNCTION_ARGS)
 Datum
 pgssp_backend_qpid(PG_FUNCTION_ARGS)
 {
-	int i;
-
-	for (i = 0; i < ProcGlobal->allProcCount; i++)
+	if(pgssp_track_pid)
 	{
-		PGPROC  *proc = &ProcGlobal->allProcs[i];
-		if (proc != NULL && proc->pid != 0 && proc->pid == PG_GETARG_INT32(0))
+		int i;
+
+		for (i = 0; i < ProcGlobal->allProcCount; i++)
 		{
-			return ProcEntryArray[i].qpid;
+			PGPROC  *proc = &ProcGlobal->allProcs[i];
+			if (proc != NULL && proc->pid != 0 && proc->pid == PG_GETARG_INT32(0))
+			{
+				return ProcEntryArray[i].qpid;
+			}
 		}
+		return 0;
 	}
-	return 0;
+	else
+		return -1;
 }
+
+//TODO reset existing ProcEntryArray[i].qpid when pgssp_track_pid is enabled 
