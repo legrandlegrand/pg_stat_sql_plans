@@ -172,7 +172,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 		usefull for sampling wait events per process and or queryid, can be used to join
 		pg_stat_activity with pg_stat_sql_plans (see exemple)
 
-		returns 0 if no qpid found, -1 where pg_stat_sql_plans.track_pid = false
+		returns 0 if no qpid found, -1 when pg_stat_sql_plans.track_pid = false
 
 
 # Wait events:
@@ -215,6 +215,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 			 AND pgsa.datid = pgssp.dbid
 			 AND pgsa.usesysid = pgssp.userid
 		WHERE pgsa.backend_type='client backend'
+		and pgsa.pid != pg_backend_pid()
 		;
 
 
