@@ -70,6 +70,9 @@
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
+#include "pgssp_explain.h"
+
+
 
 PG_MODULE_MAGIC;
 
@@ -123,10 +126,9 @@ typedef enum pgsspVersion
  */
 typedef struct pgsspHashKey
 {
-	Oid			userid;			/* user OID */
-	Oid			dbid;			/* database OID */
-	uint64		queryid;		/* query identifier */
-	uint64		planid;			/* plan identifier */
+	Oid		userid;			/* user OID */
+	Oid		dbid;			/* database OID */
+	uint64		qpid;		/* extension identifier, combination of queryid and planid */
 } pgsspHashKey;
 
 /*
@@ -134,6 +136,9 @@ typedef struct pgsspHashKey
  */
 typedef struct Counters
 {
+	uint64		queryid;		/* query identifier */
+	uint64		planid;			/* plan identifier */
+	int64		plans;			/* # of times planned */
 	int64		calls;			/* # of times executed */
 	double		total_time;		/* total execution time, in msec */
 	double		min_time;		/* minimum execution time in msec */
@@ -169,11 +174,11 @@ typedef struct Counters
  */
 typedef struct pgsspEntry
 {
-	pgsspHashKey key;			/* hash key of entry - MUST BE FIRST */
+	pgsspHashKey 	key;			/* hash key of entry - MUST BE FIRST */
 	Counters	counters;		/* the statistics for this query */
-	Size		query_offset;	/* query text offset in external file */
-	int			query_len;		/* # of valid bytes in query string, or -1 */
-	int			encoding;		/* query text encoding */
+	Size		query_offset;		/* query text offset in external file */
+	int		query_len;		/* # of valid bytes in query string, or -1 */
+	int		encoding;		/* query text encoding */
 	slock_t		mutex;			/* protects the counters only */
 } pgsspEntry;
 
@@ -187,8 +192,8 @@ typedef struct pgsspSharedState
 	Size		mean_query_len; /* current mean entry text length */
 	slock_t		mutex;			/* protects following fields only: */
 	Size		extent;			/* current extent of query file */
-	int			n_writers;		/* number of active writers to query file */
-	int			gc_count;		/* query file garbage collection cycle count */
+	int		n_writers;		/* number of active writers to query file */
+	int		gc_count;		/* query file garbage collection cycle count */
 } pgsspSharedState;
 
 /*
@@ -206,7 +211,7 @@ static int get_max_procs_count(void);
 /* Proc entry */
 typedef struct procEntry
 {
-	uint64 queryid;
+	uint64 qpid;
 } procEntry;
 /*---- Local variables ----*/
 
@@ -232,7 +237,7 @@ static HTAB *pgssp_hash = NULL;
 typedef enum
 {
 	pgssp_TRACK_NONE,			/* track no statements */
-	pgssp_TRACK_TOP,				/* only top level statements */
+	pgssp_TRACK_TOP,			/* only top level statements */
 	pgssp_TRACK_ALL				/* all statements, including nested ones */
 }			pgsspTrackLevel;
 
@@ -244,12 +249,28 @@ static const struct config_enum_entry track_options[] =
 	{NULL, 0, false}
 };
 
+typedef enum
+{
+	pgssp_PLAN_NONE,		/* track no plan*/
+	pgssp_PLAN_MINI,		/* track minimal explain plans */
+	pgssp_PLAN_STD			/* track explain plans (costs off) */
+}			pgsspPlanType;
+
+static const struct config_enum_entry plan_type_options[] =
+{
+	{"none", pgssp_PLAN_NONE, false},
+	{"mini", pgssp_PLAN_MINI, false},
+	{"standard", pgssp_PLAN_STD, false},
+	{NULL, 0, false}
+};
+
 static int	pgssp_max;			/* max # statements to track */
 static int	pgssp_track;			/* tracking level */
 static bool pgssp_track_utility; /* whether to track utility commands */
 static bool pgssp_track_errors;  /* whether to track statements in error */
-static bool pgssp_track_planid; 	/* whether to track plan id */
+static int	pgssp_plan_type; 	/* how to track plan id */
 static bool pgssp_explain;	 	/* whether to explain query */
+static bool pgssp_track_pid;	 	/* whether to track collected data per pid */
 static bool pgssp_save;			/* whether to save stats across shutdown */
 
 
@@ -275,7 +296,7 @@ PG_FUNCTION_INFO_V1(pg_stat_sql_plans_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_sql_plans_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_sql_plans);
 PG_FUNCTION_INFO_V1(pgssp_normalize_query);
-PG_FUNCTION_INFO_V1(pgssp_backend_queryid);
+PG_FUNCTION_INFO_V1(pgssp_backend_qpid);
 
 
 static void pgssp_shmem_startup(void);
@@ -296,7 +317,8 @@ static void pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					QueryEnvironment *queryEnv,
 					DestReceiver *dest, QueryCompletion *qc);
 static uint64 pgssp_hash_string(const char *str, int len);
-static void pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
+static void pgssp_store(const char *query, uint64 queryId, 
+		PlannedStmt *plan, ParamListInfo params,
 		   int query_location, int query_len,
 		   double total_time, uint64 rows,
 		   const BufferUsage *bufusage);
@@ -318,6 +340,8 @@ static void entry_reset(void);
 void normalize_expr(char *expr, bool preserve_space);
 static uint64 hash_query(const char* query);
 static procEntry *ProcEntryArray = NULL;
+
+
 
 /*
  * Module load callback
@@ -386,11 +410,12 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
- 	DefineCustomBoolVariable("pg_stat_sql_plans.track_planid",
-							 "Selects whether Plans are tracked by pg_stat_sql_plans.",
+	DefineCustomEnumVariable("pg_stat_sql_plans.plan_type",
+							 "Selects which type of explain plan is used by pg_stat_sql_plans.",
 							 NULL,
-							 &pgssp_track_planid,
-							 true,
+							 &pgssp_plan_type,
+							 pgssp_PLAN_MINI,
+							 plan_type_options,
 							 PGC_SUSET,
 							 0,
 							 NULL,
@@ -403,6 +428,17 @@ _PG_init(void)
 							 &pgssp_explain,
 							 false,
 							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("pg_stat_sql_plans.track_pid",
+							 "Selects whether data by pid are collected by pg_stat_sql_plans.",
+							 NULL,
+							 &pgssp_track_pid,
+							 false,
+							 PGC_SIGHUP,
 							 0,
 							 NULL,
 							 NULL,
@@ -828,8 +864,8 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 	if (!pgssp || !pgssp_hash || !pgssp_enabled() )
 		return;
 
-	/* Update memory structure dedicated for pgssp_backend_queryid function */
-	if (MyProc)
+	/* Update memory structure dedicated for pgssp_backend_qpid function */
+	if (MyProc && pgssp_track_pid )
 	{
 		int i = MyProc - ProcGlobal->allProcs;
 		const char *querytext = pstate->p_sourcetext;
@@ -863,11 +899,15 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		while (query_len > 0 && scanner_isspace(querytext[query_len - 1]))
 			query_len--;
 
-		/* store queryid, hash query or utility statement text */
+		/* store queryid based on utility statement text 
+		 * planned statements are updated during executor start hook
+		 * after planid calculation in planner hook
+		 */
 		if (query->utilityStmt) {
-			ProcEntryArray[i].queryid =  pgssp_hash_string(querytext, query_len);
-		} else {
-			ProcEntryArray[i].queryid =  hash_query(pstate->p_sourcetext);
+			ProcEntryArray[i].qpid =  hash_combine64(pgssp_hash_string(querytext, query_len),UINT64CONST(0));
+//		} else {
+			
+//			ProcEntryArray[i].qpid =  hash_query(pstate->p_sourcetext);
 		}
 	}
 
@@ -908,6 +948,7 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 	       ParamListInfo boundParams)
  {
  	PlannedStmt *result;
+
 
 	if (pgssp_enabled())
  	{
@@ -950,18 +991,21 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		bufusage.local_blks_written = 0;
 		bufusage.temp_blks_read = 0;
 		bufusage.temp_blks_written = 0;
-//?? à voir
+//TODO
 //		INSTR_TIME_SUBTRACT(bufusage.blk_read_time, bufusage.blk_read_time);
 //		INSTR_TIME_SUBTRACT(bufusage.blk_write_time, bufusage.blk_write_time);
-		pgssp_store(    "",
-						parse->queryId,
-						NULL,
-					    0,
-					    0,
-					   INSTR_TIME_GET_MILLISEC(duration),
-					   0, 	/* rows */ 
-					   &bufusage);
-					   
+
+
+		pgssp_store(    query_string,
+			        result->queryId,
+	       			result,
+				boundParams,
+				result->stmt_location,
+				result->stmt_len,
+				INSTR_TIME_GET_MILLISEC(duration),
+				0, 	/* rows */ 
+				&bufusage);
+
 		pgstat_report_wait_end();
  	}
  	else
@@ -985,6 +1029,12 @@ pgssp_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		prev_ExecutorStart(queryDesc, eflags);
 	else
 		standard_ExecutorStart(queryDesc, eflags);
+
+	if (MyProc && pgssp_enabled() && pgssp_track_pid && queryDesc->plannedstmt->queryId != UINT64CONST(0))
+	{
+		int i = MyProc - ProcGlobal->allProcs;
+		ProcEntryArray[i].qpid = queryDesc->plannedstmt->queryId;
+	}
 
 	/*
 	 * If query has queryId zero, don't track it.  This prevents double
@@ -1037,7 +1087,8 @@ pgssp_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
 
 			pgssp_store(queryDesc->sourceText,
 			   queryDesc->plannedstmt->queryId,
-			   queryDesc,
+			   NULL,
+			   NULL,
 			   queryDesc->plannedstmt->stmt_location,
 			   queryDesc->plannedstmt->stmt_len,
 			   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
@@ -1081,7 +1132,11 @@ pgssp_ExecutorEnd(QueryDesc *queryDesc)
 {
 	uint64		queryId = queryDesc->plannedstmt->queryId;
 
-	if (queryId != UINT64CONST(0) && queryDesc->totaltime && pgssp_enabled())
+	if (queryId != UINT64CONST(0) && queryDesc->totaltime && pgssp_enabled()
+		/* this is a workaround to prevent error of recursion when explainoneplan 
+                   is launched from pgssp_planner hook 
+		*/	
+		&& queryDesc->already_executed )
 	{
 		/*
 		 * Make sure stats accumulation is done.  (Note: it's okay if several
@@ -1092,7 +1147,8 @@ pgssp_ExecutorEnd(QueryDesc *queryDesc)
 
 		pgssp_store(queryDesc->sourceText,
 				   queryId,
-				   queryDesc,
+				   NULL,
+				   NULL,
 				   queryDesc->plannedstmt->stmt_location,
 				   queryDesc->plannedstmt->stmt_len,
 				   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
@@ -1134,7 +1190,15 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	if (pgssp_track_utility && pgssp_enabled() &&
 		!IsA(parsetree, ExecuteStmt) &&
 		!IsA(parsetree, PrepareStmt) &&
-		!IsA(parsetree, DeallocateStmt))
+		!IsA(parsetree, DeallocateStmt) &&
+// TODO exclude optimisable utility statemenents that appears 2 times otherwise
+		!IsA(parsetree, CreateTableAsStmt)
+// extend this to :
+//	create materialized view, 
+//	RefreshMatViewStmt,
+//	explain,
+//	...
+	)
 	{
 		instr_time	start;
 		instr_time	duration;
@@ -1195,6 +1259,7 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 			pgssp_store(queryString,
 					   0,	/* signal that it's a utility stmt */
 						NULL,
+						NULL,
 					   pstmt->stmt_location,
 					   pstmt->stmt_len,
 					   INSTR_TIME_GET_MILLISEC(duration),
@@ -1248,6 +1313,7 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		pgssp_store(queryString,
 				   0,			/* signal that it's a utility stmt */
 				   NULL,
+				   NULL,
 				   pstmt->stmt_location,
 				   pstmt->stmt_len,
 				   INSTR_TIME_GET_MILLISEC(duration),
@@ -1287,7 +1353,8 @@ pgssp_hash_string(const char *str, int len)
  *
  */
 static void
-pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
+pgssp_store(const char *query, uint64 queryId, 
+		PlannedStmt *plan, ParamListInfo params,
 		   int query_location, int query_len,
 		   double total_time, uint64 rows,
 		   const BufferUsage *bufusage)
@@ -1298,7 +1365,8 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	instr_time	start;
 	instr_time	duration;
 	ExplainState *es = NewExplainState();
-	uint64 planId;
+	uint64 qpId ;
+	uint64 planId = UINT64CONST(-1);
 	INSTR_TIME_SET_CURRENT(start);
 	pgstat_report_wait_start(PG_WAIT_EXTENSION);
 
@@ -1343,34 +1411,60 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	/*
 	 * For utility statements, we just hash the query string to get an ID.
 	 */
-	if (queryId == UINT64CONST(0))
+	if (queryId == UINT64CONST(0) && !plan)
 	{
 		queryId = pgssp_hash_string(query, query_len);
 		planId = UINT64CONST(0);
+		qpId = hash_combine64(queryId,planId);
 	}
-	else
+	else if (plan)
 	{
-		/* Build planid */
-		if (pgssp_track_planid && query_len > 0)
+		/* specific for optimisable utility statements like CTAS ... */
+		if (queryId == UINT64CONST(0))
 		{
-			/* this part comes from auto_explain, to be implemented later */
+			/* query text can be normalized here */
+			queryId = hash_query(query);
+		}
 
-//			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
-//			es->verbose = auto_explain_log_verbose;
-//			es->buffers = (es->analyze && auto_explain_log_buffers);
-//			es->timing = (es->analyze && auto_explain_log_timing);
-//			es->summary = es->analyze;
-//			es->settings = true;
+		/* Build planid */
+		if (pgssp_plan_type == pgssp_PLAN_NONE)
+		{
+			planId = UINT64CONST(1);
+			qpId = hash_combine64(queryId,planId);
+			plan->queryId = qpId;
+		}
+		else
+		{
+			/* this part comes from auto_explain
+			 * ExplainPrintPlan has been replaced by
+			 * ExplainOnePlan to be able to be calculated 
+			 * from planner hook.
+			 *
+			 *	es->verbose = true;
+			 * could help on databases with multiple schemas
+			 * having tables with the same names.
+			 *
+			 *	es->settings = true;
+			 * may help when gucs are modified per session.
+			 */
+
 			
 			/* COSTS off: to make overhead smaller */ 
 			es->costs = false;
-			
 			es->format = EXPLAIN_FORMAT_TEXT;
 
 			ExplainBeginOutput(es);
 
 //			ExplainQueryText(es, queryDesc);
-			ExplainPrintPlan(es, queryDesc);
+			if (pgssp_plan_type == pgssp_PLAN_STD )
+				ExplainOnePlan(plan, NULL, es, query, params,
+							NULL, NULL, NULL);
+
+			if (pgssp_plan_type == pgssp_PLAN_MINI )
+				pgssp_ExplainOnePlan(plan, NULL, es, query, params,
+							NULL, NULL, NULL);
+
+
 //			if (es->analyze && auto_explain_log_triggers)
 //				ExplainPrintTriggers(es, queryDesc);
 			ExplainEndOutput(es);
@@ -1379,26 +1473,26 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 			if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
 				es->str->data[--es->str->len] = '\0';
 
-			/* Fix JSON to output an object */
-//			if (auto_explain_log_format == EXPLAIN_FORMAT_JSON)
-//			{
-//				es->str->data[0] = '{';
-//				es->str->data[es->str->len - 1] = '}';
-//			}
+			if (pgssp_plan_type == pgssp_PLAN_STD )
+				planId = hash_query(es->str->data);
 
-			planId = hash_query(es->str->data);
+			if (pgssp_plan_type == pgssp_PLAN_MINI )
+				planId = pgssp_hash_string(es->str->data, es->str->len);
+
+			/* alter queryid value to reflect planid */
+			qpId = hash_combine64(queryId,planId);
+			plan->queryId = qpId;
 		}
-		else
-			if (query_len == 0)
-				planId = UINT64CONST(-1);
-			else	
-				planId = UINT64CONST(1);
-    }	
+	}
+	else
+		/* execution of a planned query */
+		qpId = queryId;	
+
+
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();
 	key.dbid = MyDatabaseId;
-	key.queryid = queryId;
-	key.planid = planId;
+	key.qpid = qpId;
 
 	/* Lookup the hash table entry with shared lock. */
 	LWLockAcquire(pgssp->lock, LW_SHARED);
@@ -1406,7 +1500,7 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 	entry = (pgsspEntry *) hash_search(pgssp_hash, &key, HASH_FIND, NULL);
 
 	/* Create new entry, at the end of execution*/
-	if (!entry && planId != UINT64CONST(-1))
+	if (!entry )
 	{
 		Size		query_offset;
 		int			gc_count;
@@ -1451,26 +1545,18 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		if (do_gc)
 			gc_qtexts();
 
-		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && pgssp_explain)
+		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && planId != UINT64CONST(-1) && pgssp_explain)
 		{
 			/*
 			 * Plan is only logged one time for each queryid / planId
 			 */
 			ereport(LOG,
-					(errmsg("queryid: %lld planid: %lld plan:\n%s",
-							(long long)queryId, (long long)planId, es->str->data),
+					(errmsg("qpid: %lld queryid: %lld planid: %lld plan:\n%s",
+						(long long)qpId, (long long)queryId, (long long)planId, es->str->data),
 					 errhidecontext(true), errhidestmt(true)));
 		}
 	}
 
-	/* add new entry after planning (without text) */ 
-	if (!entry && planId == UINT64CONST(-1) )
-	{
-		LWLockRelease(pgssp->lock);
-		LWLockAcquire(pgssp->lock, LW_EXCLUSIVE);
-		/* OK to create a new hashtable entry  without text */
-		entry = entry_alloc(&key, 0, 0, encoding);
-	}
 	
 	/* Increment the counts */
 	if (true)
@@ -1483,8 +1569,18 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 
 		SpinLockAcquire(&e->mutex);
 
+		/*
+		 * queryid and planid are initialized during planning or utility only,
+		 * not touched during execution
+		 */
+		if (plan || planId == UINT64CONST(0))
+		{
+			e->counters.queryid = queryId;
+			e->counters.planid = planId;
+		}
+
 		/* "Unstick" entry if it was previously sticky */
-		if (e->counters.calls == 0)
+		if ( e->counters.plans == 0 && e->counters.calls == 0)
 		{
 			e->counters.first_call = GetCurrentTimestamp();
 		}
@@ -1495,41 +1591,47 @@ pgssp_store(const char *query, uint64 queryId, QueryDesc *queryDesc,
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
 
-		if(planId != UINT64CONST(-1))
-			e->counters.exec_time += total_time; 
-		else
+		if(plan)
+		{
+			e->counters.plans += 1;
 			e->counters.plan_time += total_time; 
+		}
+		else
+		{
+			e->counters.calls += 1;
+			e->counters.exec_time += total_time; 
+		}
+
 		
 		e->counters.extn_time += INSTR_TIME_GET_MILLISEC(duration);
-		total_time = total_time + INSTR_TIME_GET_MILLISEC(duration);
+		total_time += INSTR_TIME_GET_MILLISEC(duration);
 
-		e->counters.calls += 1;
 		e->counters.total_time += total_time ;
-		if (e->counters.calls == 1)
-		{
-			e->counters.min_time = total_time;
-			e->counters.max_time = total_time;
-			e->counters.mean_time = total_time;
-		}
-		else
-		{
-			/*
-			 * Welford's method for accurately computing variance. See
-			 * <http://www.johndcook.com/blog/standard_deviation/>
-			 */
-			double		old_mean = e->counters.mean_time;
-
-			e->counters.mean_time +=
-				(total_time - old_mean) / e->counters.calls;
-			e->counters.sum_var_time +=
-				(total_time - old_mean) * (total_time - e->counters.mean_time);
-
-			/* calculate min and max time */
-			if (e->counters.min_time > total_time)
-				e->counters.min_time = total_time;
-			if (e->counters.max_time < total_time)
-				e->counters.max_time = total_time;
-		}
+//TODO		if (e->counters.calls == 1)
+//		{
+//			e->counters.min_time = total_time;
+//			e->counters.max_time = total_time;
+//			e->counters.mean_time = total_time;
+//		}
+//		else
+//		{
+//			/*
+//			 * Welford's method for accurately computing variance. See
+//			 * <http://www.johndcook.com/blog/standard_deviation/>
+//			 */
+//			double		old_mean = e->counters.mean_time;
+//
+//			e->counters.mean_time +=
+//				(total_time - old_mean) / e->counters.calls;
+//			e->counters.sum_var_time +=
+//				(total_time - old_mean) * (total_time - e->counters.mean_time);
+//
+//			/* calculate min and max time */
+//			if (e->counters.min_time > total_time)
+//				e->counters.min_time = total_time;
+//			if (e->counters.max_time < total_time)
+//				e->counters.max_time = total_time;
+//		}
 		e->counters.rows += rows;
 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
 		e->counters.shared_blks_read += bufusage->shared_blks_read;
@@ -1572,8 +1674,9 @@ pg_stat_sql_plans_reset(PG_FUNCTION_ARGS)
 #define pg_stat_sql_plans_COLS_V1_0	14
 #define pg_stat_sql_plans_COLS_V1_1	18
 #define pg_stat_sql_plans_COLS_V1_2	19
-#define pg_stat_sql_plans_COLS_V1_3	29
-#define pg_stat_sql_plans_COLS			29	/* maximum of above */
+//#define pg_stat_sql_plans_COLS_V1_3	29
+#define pg_stat_sql_plans_COLS_V1_3	31
+#define pg_stat_sql_plans_COLS			31	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1775,8 +1878,8 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 		int			i = 0;
 		Counters	tmp;
 		double		stddev;
-		int64		queryid = entry->key.queryid;
-		int64		planid = entry->key.planid;
+		/* qpid replaces combined key (queryid,planid) */
+		int64		qpid = entry->key.qpid;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
@@ -1786,11 +1889,8 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 
 		if (is_allowed_role || entry->key.userid == userid)
 		{
-			if (api_version >= pgssp_V1_2)
-				values[i++] = Int64GetDatumFast(queryid);
-
 			if (api_version >= pgssp_V1_3)
-				values[i++] = Int64GetDatumFast(planid);
+				values[i++] = Int64GetDatumFast(qpid);
 
 			if (showtext)
 			{
@@ -1850,9 +1950,15 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 		}
 
 		/* Skip entry if unexecuted (ie, it's a pending "sticky" entry) */
-		if (tmp.calls == 0)
+		if (tmp.plans == 0 && tmp.calls == 0 )
 			continue;
 
+		if (api_version >= pgssp_V1_3)
+		{
+			values[i++] = Int64GetDatumFast(tmp.queryid);
+			values[i++] = Int64GetDatumFast(tmp.planid);
+			values[i++] = Int64GetDatumFast(tmp.plans);
+		}
 		values[i++] = Int64GetDatumFast(tmp.calls);
 		values[i++] = Float8GetDatumFast(tmp.total_time);
 		if (api_version >= pgssp_V1_3)
@@ -1980,6 +2086,7 @@ entry_alloc(pgsspHashKey *key, Size query_offset, int query_len, int encoding)
 
 /*
  * qsort comparator for sorting into increasing usage order
+ * !!! this is a pgssp specific eviction criteria based on last_call time !!!
  */
 static int
 entry_cmp(const void *lhs, const void *rhs)
@@ -2784,17 +2891,24 @@ pgssp_normalize_query(PG_FUNCTION_ARGS)
 }
 
 Datum
-pgssp_backend_queryid(PG_FUNCTION_ARGS)
+pgssp_backend_qpid(PG_FUNCTION_ARGS)
 {
-	int i;
-
-	for (i = 0; i < ProcGlobal->allProcCount; i++)
+	if(pgssp_track_pid)
 	{
-		PGPROC  *proc = &ProcGlobal->allProcs[i];
-		if (proc != NULL && proc->pid != 0 && proc->pid == PG_GETARG_INT32(0))
+		int i;
+
+		for (i = 0; i < ProcGlobal->allProcCount; i++)
 		{
-			return ProcEntryArray[i].queryid;
+			PGPROC  *proc = &ProcGlobal->allProcs[i];
+			if (proc != NULL && proc->pid != 0 && proc->pid == PG_GETARG_INT32(0))
+			{
+				return ProcEntryArray[i].qpid;
+			}
 		}
+		return 0;
 	}
-	return 0;
+	else
+		return -1;
 }
+
+//TODO reset existing ProcEntryArray[i].qpid when pgssp_track_pid is enabled 
