@@ -905,9 +905,9 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		 */
 		if (query->utilityStmt) {
 			ProcEntryArray[i].qpid =  hash_combine64(pgssp_hash_string(querytext, query_len),UINT64CONST(0));
-//		} else {
-			
-//			ProcEntryArray[i].qpid =  hash_query(pstate->p_sourcetext);
+		} else {
+			/* init with queryId value for planning phase */
+			ProcEntryArray[i].qpid =  hash_query(pstate->p_sourcetext);
 		}
 	}
 
@@ -956,11 +956,9 @@ pgssp_post_parse_analyze(ParseState *pstate, Query *query)
 		instr_time		duration;
 		BufferUsage 	bufusage;
 
-		INSTR_TIME_SET_CURRENT(start);
-		
 		//		pgstat_report_wait_start(0x0B010000U); // gives ???-unknown wait event
 	 	pgstat_report_wait_start(0x050E0000U); // gives Activity-unknown wait event
-
+		INSTR_TIME_SET_CURRENT(start);
  
 		nested_level++;
  		PG_TRY();
@@ -1033,6 +1031,12 @@ pgssp_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (MyProc && pgssp_enabled() && pgssp_track_pid && queryDesc->plannedstmt->queryId != UINT64CONST(0))
 	{
 		int i = MyProc - ProcGlobal->allProcs;
+		/* 
+		 * !!! this may be executed before planner hook end
+		 * when explain is slow (and plan cache not used) 
+		 * queryId is then the value initialized in post parse
+		 * when it should have been the value combined with planId !!!
+		*/
 		ProcEntryArray[i].qpid = queryDesc->plannedstmt->queryId;
 	}
 
@@ -1367,8 +1371,8 @@ pgssp_store(const char *query, uint64 queryId,
 	ExplainState *es = NewExplainState();
 	uint64 qpId ;
 	uint64 planId = UINT64CONST(-1);
-	INSTR_TIME_SET_CURRENT(start);
 	pgstat_report_wait_start(PG_WAIT_EXTENSION);
+	INSTR_TIME_SET_CURRENT(start);
 
 	Assert(query != NULL);
 

@@ -168,12 +168,14 @@ Alpha version, DO NOT USE IN PRODUCTION
 		replace litérals and numerics per ?
 
 	- pgssp_backend_qpid(pid)
-		Returns last (nested) qpid executed (in success) by backend.
+		Returns last (nested) query plan id executing/executed by backend. 
+		It returns queryid value during planning, and planid calculation. 
+		This value does not reflect statements with syntax error (that are not parsed).
 		Usefull to identify the query plan of a never ending query (without cancelling it)
 		Also usefull for sampling wait events per queryid/planid, can be used to join
 		pg_stat_activity with pg_stat_sql_plans (see exemple)
 
-		returns 0 if no qpid found, -1 when pg_stat_sql_plans.track_pid = false
+		returns 0 if no qpid found, -1 when trackin is diabled (pg_stat_sql_plans.track_pid = false)
 
 
 # Wait events:
@@ -184,7 +186,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 			- planid calculation (that can be long on table with many columns),
 			- old entries eviction
 
-	- planing event
+	- planning event
 		During planning event_type-event_name  "Activity"-"unknown wait event"
 		are displayed.
 
@@ -199,42 +201,38 @@ Alpha version, DO NOT USE IN PRODUCTION
 			pgsa.application_name,
 			pgsa.state,
 			pgsa.query,
-			pgssp.queryid,
+			coalesce(queryid,pgsa.qpid) queryid,
 			pgssp.planid,
 			pgssp_normalize_query(pgssp.query),
 			pgssp.calls
 		FROM
-			pg_stat_activity pgsa
+			(SELECT *, pgssp_backend_qpid(pid) qpid FROM pg_stat_activity) pgsa
 				LEFT OUTER JOIN pg_stat_sql_plans pgssp
-			 ON  pgssp_backend_qpid( pgsa.pid ) = pgssp.qpid
+			 ON  pgsa.qpid = pgssp.qpid
 			 AND pgsa.datid = pgssp.dbid
 			 AND pgsa.usesysid = pgssp.userid
 		WHERE pgsa.backend_type='client backend'
-		and pgsa.pid != pg_backend_pid()
+		AND pgsa.pid != pg_backend_pid()
 		;
 
 
 	- sampling wait events pg_stat_activity per query plan id
 
-		create table mon as
-		SELECT pid,wait_event_type,wait_event,pgssp_backend_qpid( pid ) as queryplanid
+		CREATE UNLOGGED TABLE mon AS
+		SELECT pid,wait_event_type,wait_event,pgssp_backend_qpid(pid) AS qpid
 			FROM pg_stat_activity
-			WHERE state = 'active' and pid != pg_backend_pid()
+			WHERE 0=1
 		;
 
-		DO
-		$$
-		DECLARE
-			i int;
+		DO $$
 		BEGIN
-			while true
-			loop
-				INSERT into mon select pid,wait_event_type,wait_event,pgssp_backend_qpid( pid )
+			LOOP
+				INSERT INTO mon SELECT pid,wait_event_type,wait_event,pgssp_backend_qpid(pid)
 					FROM pg_stat_activity
 					WHERE state ='active' and pid != pg_backend_pid();
 				PERFORM pg_sleep(0.01);
 				COMMIT;
-			end loop;
-		END
+			END LOOP;
+		END;
 		$$
 		;
