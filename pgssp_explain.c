@@ -3,22 +3,11 @@
  * explain.c
  *	  Explain query execution plans
  *
- * Modified version taken from pg13devel 2020-05 (before RC1) 
- * that only gives the Backbone of textual explain plan, 
- * for better performances.
- *
- * It fixes problems seen with "perf top" with high cpu usage of 
- *   - colname_is_unique
- *   - hash_create from set_rtable_names
- * all modifications are commented 
- *   - with //PLY, 
- *   - some procs are prefixed with pgssp_
- * 
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
- *	  pg_stat_sql_plans/pgssp_explain.c
+ *	  src/backend/commands/explain.c
  *
  *-------------------------------------------------------------------------
  */
@@ -64,9 +53,6 @@ explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 #define X_CLOSE_IMMEDIATE 2
 #define X_NOWHITESPACE 4
 
-void
-pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
-
 static void ExplainOneQuery(Query *query, int cursorOptions,
 							IntoClause *into, ExplainState *es,
 							const char *queryString, ParamListInfo params,
@@ -77,7 +63,7 @@ static void report_triggers(ResultRelInfo *rInfo, bool show_relname,
 							ExplainState *es);
 static double elapsed_time(instr_time *starttime);
 static bool ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used);
-static void pgssp_ExplainNode(PlanState *planstate, List *ancestors,
+static void ExplainNode(PlanState *planstate, List *ancestors,
 						const char *relationship, const char *plan_name,
 						ExplainState *es);
 static void show_plan_tlist(PlanState *planstate, List *ancestors,
@@ -499,7 +485,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 }
 
 /*
- * pgssp_ExplainOnePlan -
+ * ExplainOnePlan -
  *		given a planned query, execute it if needed, and then print
  *		EXPLAIN output
  *
@@ -511,7 +497,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-pgssp_ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage)
@@ -598,7 +584,7 @@ pgssp_ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *e
 	ExplainOpenGroup("Query", NULL, true, es);
 
 	/* Create textual dump of plan tree */
-	pgssp_ExplainPrintPlan(es, queryDesc);
+	ExplainPrintPlan(es, queryDesc);
 
 	if (es->summary && (planduration || bufusage))
 		ExplainOpenGroup("Planning", "Planning", true, es);
@@ -742,7 +728,7 @@ ExplainPrintSettings(ExplainState *es)
  * NB: will not work on utility statements
  */
 void
-pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
+ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 {
 	Bitmapset  *rels_used = NULL;
 	PlanState  *ps;
@@ -751,10 +737,10 @@ pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	Assert(queryDesc->plannedstmt != NULL);
 	es->pstmt = queryDesc->plannedstmt;
 	es->rtable = queryDesc->plannedstmt->rtable;
-//PLY	ExplainPreScanNode(queryDesc->planstate, &rels_used);
-//	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
-//	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
-//								es->rtable_names);
+	ExplainPreScanNode(queryDesc->planstate, &rels_used);
+	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
+	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
+													es->rtable_names);
 	es->printed_subplans = NULL;
 
 	/*
@@ -767,12 +753,12 @@ pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	 * further down in the plan tree.
 	 */
 	ps = queryDesc->planstate;
-	if (IsA(ps, GatherState) &&((Gather *) ps->plan)->invisible)
+	if (IsA(ps, GatherState) && ((Gather *) ps->plan)->invisible)
 	{
 		ps = outerPlanState(ps);
 		es->hide_workers = true;
 	}
-	pgssp_ExplainNode(ps, NIL, NULL, NULL, es);
+	ExplainNode(ps, NIL, NULL, NULL, es);
 
 	/*
 	 * If requested, include information about GUC parameters with values that
@@ -1132,7 +1118,7 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
  * by ExplainOpenGroup/ExplainCloseGroup.
  */
 static void
-pgssp_ExplainNode(PlanState *planstate, List *ancestors,
+ExplainNode(PlanState *planstate, List *ancestors,
 			const char *relationship, const char *plan_name,
 			ExplainState *es)
 {
@@ -1713,8 +1699,6 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	/* quals, sort keys, etc */
-
-/* PLY keep only explain plan backbone, as column names are not available 
 	switch (nodeTag(plan))
 	{
 		case T_IndexScan:
@@ -1766,6 +1750,8 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 		case T_SampleScan:
 			show_tablesample(((SampleScan *) plan)->tablesample,
 							 planstate, ancestors, es);
+			/* fall through to print additional fields the same as SeqScan */
+			/* FALLTHROUGH */
 		case T_SeqScan:
 		case T_ValuesScan:
 		case T_CteScan:
@@ -1788,6 +1774,7 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 				ExplainPropertyInteger("Workers Planned", NULL,
 									   gather->num_workers, es);
 
+				/* Show params evaluated at gather node */
 				if (gather->initParam)
 					show_eval_params(gather->initParam, es);
 
@@ -1815,6 +1802,7 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 				ExplainPropertyInteger("Workers Planned", NULL,
 									   gm->num_workers, es);
 
+				/* Show params evaluated at gather-merge node */
 				if (gm->initParam)
 					show_eval_params(gm->initParam, es);
 
@@ -1840,6 +1828,7 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 
 					fexprs = lappend(fexprs, rtfunc->funcexpr);
 				}
+				/* We rely on show_expression to insert commas as needed */
 				show_expression((Node *) fexprs,
 								"Function Call", planstate, ancestors,
 								es->verbose, es);
@@ -1865,6 +1854,10 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_TidScan:
 			{
+				/*
+				 * The tidquals list has OR semantics, so be sure to show it
+				 * as an OR condition.
+				 */
 				List	   *tidquals = ((TidScan *) plan)->tidquals;
 
 				if (list_length(tidquals) > 1)
@@ -1979,7 +1972,6 @@ pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 		default:
 			break;
 	}
-PLY */
 
 	/*
 	 * Prepare per-worker JIT instrumentation.  As with the overall JIT
@@ -2084,12 +2076,12 @@ PLY */
 
 	/* lefttree */
 	if (outerPlanState(planstate))
-		pgssp_ExplainNode(outerPlanState(planstate), ancestors,
+		ExplainNode(outerPlanState(planstate), ancestors,
 					"Outer", NULL, es);
 
 	/* righttree */
 	if (innerPlanState(planstate))
-		pgssp_ExplainNode(innerPlanState(planstate), ancestors,
+		ExplainNode(innerPlanState(planstate), ancestors,
 					"Inner", NULL, es);
 
 	/* special child plans */
@@ -2121,7 +2113,7 @@ PLY */
 							   ancestors, es);
 			break;
 		case T_SubqueryScan:
-			pgssp_ExplainNode(((SubqueryScanState *) planstate)->subplan, ancestors,
+			ExplainNode(((SubqueryScanState *) planstate)->subplan, ancestors,
 						"Subquery", NULL, es);
 			break;
 		case T_CustomScan:
@@ -2264,7 +2256,7 @@ show_scan_qual(List *qual, const char *qlabel,
 {
 	bool		useprefix;
 
-	useprefix = (IsA(planstate->plan, SubqueryScan) ||es->verbose);
+	useprefix = (IsA(planstate->plan, SubqueryScan) || es->verbose);
 	show_qual(qual, qlabel, planstate, ancestors, useprefix, es);
 }
 
@@ -2786,7 +2778,7 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 	{
 		if (indent)
 			appendStringInfoSpaces(es->str, es->indent * 2);
-		appendStringInfo(es->str, "%s Groups: " INT64_FORMAT " Sort Method", groupLabel,
+		appendStringInfo(es->str, "%s Groups: " INT64_FORMAT "  Sort Method", groupLabel,
 						 groupInfo->groupCount);
 		/* plural/singular based on methodNames size */
 		if (list_length(methodNames) > 1)
@@ -2806,9 +2798,9 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 			const char *spaceTypeName;
 
 			spaceTypeName = tuplesort_space_type_name(SORT_SPACE_TYPE_MEMORY);
-			appendStringInfo(es->str, " %s: avg=%ldkB peak=%ldkB",
+			appendStringInfo(es->str, "  Average %s: %ldkB  Peak %s: %ldkB",
 							 spaceTypeName, avgSpace,
-							 groupInfo->maxMemorySpaceUsed);
+							 spaceTypeName, groupInfo->maxMemorySpaceUsed);
 		}
 
 		if (groupInfo->maxDiskSpaceUsed > 0)
@@ -2818,12 +2810,9 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 			const char *spaceTypeName;
 
 			spaceTypeName = tuplesort_space_type_name(SORT_SPACE_TYPE_DISK);
-			/* Add a semicolon separator only if memory stats were printed. */
-			if (groupInfo->maxMemorySpaceUsed > 0)
-				appendStringInfo(es->str, ";");
-			appendStringInfo(es->str, " %s: avg=%ldkB peak=%ldkB",
+			appendStringInfo(es->str, "  Average %s: %ldkB  Peak %s: %ldkB",
 							 spaceTypeName, avgSpace,
-							 groupInfo->maxDiskSpaceUsed);
+							 spaceTypeName, groupInfo->maxDiskSpaceUsed);
 		}
 	}
 	else
@@ -2877,7 +2866,7 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 }
 
 /*
- * If it's EXPLAIN ANALYZE, show tuplesort stats for a incremental sort node
+ * If it's EXPLAIN ANALYZE, show tuplesort stats for an incremental sort node
  */
 static void
 show_incremental_sort_info(IncrementalSortState *incrsortstate,
@@ -2897,8 +2886,8 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 	 * we don't need to do anything if there were 0 full groups.
 	 *
 	 * We still have to continue after this block if there are no full groups,
-	 * though, since it's possible that we have workers that did real work even
-	 * if the leader didn't participate.
+	 * though, since it's possible that we have workers that did real work
+	 * even if the leader didn't participate.
 	 */
 	if (fullsortGroupInfo->groupCount > 0)
 	{
@@ -2907,8 +2896,8 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 		if (prefixsortGroupInfo->groupCount > 0)
 		{
 			if (es->format == EXPLAIN_FORMAT_TEXT)
-				appendStringInfo(es->str, " ");
-			show_incremental_sort_group_info(prefixsortGroupInfo, "Presorted", false, es);
+				appendStringInfo(es->str, "\n");
+			show_incremental_sort_group_info(prefixsortGroupInfo, "Pre-sorted", true, es);
 		}
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 			appendStringInfo(es->str, "\n");
@@ -2925,21 +2914,19 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 			&incrsortstate->shared_info->sinfo[n];
 
 			/*
-			 * If a worker hasn't process any sort groups at all, then exclude
-			 * it from output since it either didn't launch or didn't
+			 * If a worker hasn't processed any sort groups at all, then
+			 * exclude it from output since it either didn't launch or didn't
 			 * contribute anything meaningful.
 			 */
 			fullsortGroupInfo = &incsort_info->fullsortGroupInfo;
-			prefixsortGroupInfo = &incsort_info->prefixsortGroupInfo;
 
 			/*
 			 * Since we never have any prefix groups unless we've first sorted
 			 * a full groups and transitioned modes (copying the tuples into a
-			 * prefix group), we don't need to do anything if there were 0 full
-			 * groups.
+			 * prefix group), we don't need to do anything if there were 0
+			 * full groups.
 			 */
-			if (fullsortGroupInfo->groupCount == 0 &&
-				prefixsortGroupInfo->groupCount == 0)
+			if (fullsortGroupInfo->groupCount == 0)
 				continue;
 
 			if (es->workers_state)
@@ -2948,11 +2935,12 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 			indent_first_line = es->workers_state == NULL || es->verbose;
 			show_incremental_sort_group_info(fullsortGroupInfo, "Full-sort",
 											 indent_first_line, es);
+			prefixsortGroupInfo = &incsort_info->prefixsortGroupInfo;
 			if (prefixsortGroupInfo->groupCount > 0)
 			{
 				if (es->format == EXPLAIN_FORMAT_TEXT)
-					appendStringInfo(es->str, " ");
-				show_incremental_sort_group_info(prefixsortGroupInfo, "Presorted", false, es);
+					appendStringInfo(es->str, "\n");
+				show_incremental_sort_group_info(prefixsortGroupInfo, "Pre-sorted", true, es);
 			}
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 				appendStringInfo(es->str, "\n");
@@ -3060,8 +3048,8 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 static void
 show_hashagg_info(AggState *aggstate, ExplainState *es)
 {
-	Agg		*agg	   = (Agg *)aggstate->ss.ps.plan;
-	int64	 memPeakKb = (aggstate->hash_mem_peak + 1023) / 1024;
+	Agg		   *agg = (Agg *) aggstate->ss.ps.plan;
+	int64		memPeakKb = (aggstate->hash_mem_peak + 1023) / 1024;
 
 	Assert(IsA(aggstate, AggState));
 
@@ -3351,31 +3339,31 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 		/* Show only positive counter values. */
-		if ((usage->wal_records > 0) || (usage->wal_fpw > 0) ||
+		if ((usage->wal_records > 0) || (usage->wal_fpi > 0) ||
 			(usage->wal_bytes > 0))
 		{
 			ExplainIndentText(es);
 			appendStringInfoString(es->str, "WAL:");
 
 			if (usage->wal_records > 0)
-				appendStringInfo(es->str, "  records=%ld",
+				appendStringInfo(es->str, " records=%ld",
 								 usage->wal_records);
-			if (usage->wal_fpw > 0)
-				appendStringInfo(es->str, "  full page writes=%ld",
-								 usage->wal_fpw);
+			if (usage->wal_fpi > 0)
+				appendStringInfo(es->str, " fpi=%ld",
+								 usage->wal_fpi);
 			if (usage->wal_bytes > 0)
-				appendStringInfo(es->str, "  bytes=" UINT64_FORMAT,
+				appendStringInfo(es->str, " bytes=" UINT64_FORMAT,
 								 usage->wal_bytes);
 			appendStringInfoChar(es->str, '\n');
 		}
 	}
 	else
 	{
-		ExplainPropertyInteger("WAL records", NULL,
+		ExplainPropertyInteger("WAL Records", NULL,
 							   usage->wal_records, es);
-		ExplainPropertyInteger("WAL full page writes", NULL,
-							   usage->wal_fpw, es);
-		ExplainPropertyUInteger("WAL bytes", NULL,
+		ExplainPropertyInteger("WAL FPI", NULL,
+							   usage->wal_fpi, es);
+		ExplainPropertyUInteger("WAL Bytes", NULL,
 								usage->wal_bytes, es);
 	}
 }
@@ -3388,7 +3376,6 @@ ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 						ExplainState *es)
 {
 	const char *indexname = explain_get_index_name(indexid);
-//PLY other improvement to check ?
 
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
@@ -3455,9 +3442,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 	char	   *refname;
 
 	rte = rt_fetch(rti, es->rtable);
-//PLY	refname = (char *) list_nth(es->rtable_names, rti - 1);
-// modified because es->rtable_names not initialized any more for performances reason
-	refname = NULL;
+	refname = (char *) list_nth(es->rtable_names, rti - 1);
 	if (refname == NULL)
 		refname = rte->eref->aliasname;
 
@@ -3475,7 +3460,6 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 			/* Assert it's on a real relation */
 			Assert(rte->rtekind == RTE_RELATION);
 			objectname = get_rel_name(rte->relid);
-//PLY other improvement to check ?
 			if (es->verbose)
 				namespace = get_namespace_name(get_rel_namespace(rte->relid));
 			objecttag = "Relation Name";
@@ -3502,8 +3486,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 						FuncExpr   *funcexpr = (FuncExpr *) rtfunc->funcexpr;
 						Oid			funcid = funcexpr->funcid;
 
-					objectname = get_func_name(funcid);
-//PLY other improvement to check ?
+						objectname = get_func_name(funcid);
 						if (es->verbose)
 							namespace =
 								get_namespace_name(get_func_namespace(funcid));
@@ -3739,7 +3722,7 @@ ExplainMemberNodes(PlanState **planstates, int nplans,
 	int			j;
 
 	for (j = 0; j < nplans; j++)
-		pgssp_ExplainNode(planstates[j], ancestors,
+		ExplainNode(planstates[j], ancestors,
 					"Member", NULL, es);
 }
 
@@ -3797,7 +3780,7 @@ ExplainSubPlans(List *plans, List *ancestors,
 		 */
 		ancestors = lcons(sp, ancestors);
 
-		pgssp_ExplainNode(sps->planstate, ancestors,
+		ExplainNode(sps->planstate, ancestors,
 					relationship, sp->plan_name, es);
 
 		ancestors = list_delete_first(ancestors);
@@ -3815,7 +3798,7 @@ ExplainCustomChildren(CustomScanState *css, List *ancestors, ExplainState *es)
 	(list_length(css->custom_ps) != 1 ? "children" : "child");
 
 	foreach(cell, css->custom_ps)
-		pgssp_ExplainNode((PlanState *) lfirst(cell), ancestors, label, NULL, es);
+		ExplainNode((PlanState *) lfirst(cell), ancestors, label, NULL, es);
 }
 
 /*
