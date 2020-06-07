@@ -437,7 +437,7 @@ _PG_init(void)
 							 "Selects whether data by pid are collected by pg_stat_sql_plans.",
 							 NULL,
 							 &pgssp_track_pid,
-							 false,
+							 true,
 							 PGC_SIGHUP,
 							 0,
 							 NULL,
