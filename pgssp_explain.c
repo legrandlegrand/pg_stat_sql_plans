@@ -1,13 +1,24 @@
 /*-------------------------------------------------------------------------
  *
- * explain.c
+ * pgssp_explain.c
  *	  Explain query execution plans
+ *
+ * Modified version taken from pg13devel 2020-05 (before RC1) 
+ * that only gives the Backbone of textual explain plan, 
+ * for better performances.
+ *
+ * It fixes problems seen with "perf top" with high cpu usage of 
+ *   - colname_is_unique
+ *   - hash_create from set_rtable_names
+ * all modifications are commented 
+ *   - with //PLY, 
+ *   - some procs are prefixed with pgssp_
  *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
- *	  src/backend/commands/explain.c
+ *	  pg_stat_sql_plans/pgssp_explain.c
  *
  *-------------------------------------------------------------------------
  */
@@ -53,7 +64,16 @@ explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 #define X_CLOSE_IMMEDIATE 2
 #define X_NOWHITESPACE 4
 
-static void ExplainOneQuery(Query *query, int cursorOptions,
+void
+pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
+
+void
+pgssp_ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+			   const char *queryString, ParamListInfo params,
+			   QueryEnvironment *queryEnv, const instr_time *planduration,
+			   const BufferUsage *bufusage);
+
+static void pgssp_ExplainOneQuery(Query *query, int cursorOptions,
 							IntoClause *into, ExplainState *es,
 							const char *queryString, ParamListInfo params,
 							QueryEnvironment *queryEnv);
@@ -63,7 +83,7 @@ static void report_triggers(ResultRelInfo *rInfo, bool show_relname,
 							ExplainState *es);
 static double elapsed_time(instr_time *starttime);
 static bool ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used);
-static void ExplainNode(PlanState *planstate, List *ancestors,
+static void pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 						const char *relationship, const char *plan_name,
 						ExplainState *es);
 static void show_plan_tlist(PlanState *planstate, List *ancestors,
@@ -276,7 +296,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 		/* Explain every plan */
 		foreach(l, rewritten)
 		{
-			ExplainOneQuery(lfirst_node(Query, l),
+			pgssp_ExplainOneQuery(lfirst_node(Query, l),
 							CURSOR_OPT_PARALLEL_OK, NULL, es,
 							pstate->p_sourcetext, params, pstate->p_queryEnv);
 
@@ -362,7 +382,7 @@ ExplainResultDesc(ExplainStmt *stmt)
  * "into" is NULL unless we are explaining the contents of a CreateTableAsStmt.
  */
 static void
-ExplainOneQuery(Query *query, int cursorOptions,
+pgssp_ExplainOneQuery(Query *query, int cursorOptions,
 				IntoClause *into, ExplainState *es,
 				const char *queryString, ParamListInfo params,
 				QueryEnvironment *queryEnv)
@@ -405,7 +425,7 @@ ExplainOneQuery(Query *query, int cursorOptions,
 		}
 
 		/* run it (if needed) and produce output */
-		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
+		pgssp_ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
 					   &planduration, (es->buffers ? &bufusage : NULL));
 	}
 }
@@ -441,7 +461,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 
 		rewritten = QueryRewrite(castNode(Query, copyObject(ctas->query)));
 		Assert(list_length(rewritten) == 1);
-		ExplainOneQuery(linitial_node(Query, rewritten),
+		pgssp_ExplainOneQuery(linitial_node(Query, rewritten),
 						CURSOR_OPT_PARALLEL_OK, ctas->into, es,
 						queryString, params, queryEnv);
 	}
@@ -460,7 +480,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 
 		rewritten = QueryRewrite(castNode(Query, copyObject(dcs->query)));
 		Assert(list_length(rewritten) == 1);
-		ExplainOneQuery(linitial_node(Query, rewritten),
+		pgssp_ExplainOneQuery(linitial_node(Query, rewritten),
 						dcs->options, NULL, es,
 						queryString, params, queryEnv);
 	}
@@ -485,7 +505,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 }
 
 /*
- * ExplainOnePlan -
+ * pgssp_ExplainOnePlan -
  *		given a planned query, execute it if needed, and then print
  *		EXPLAIN output
  *
@@ -497,7 +517,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+pgssp_ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage)
@@ -584,7 +604,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExplainOpenGroup("Query", NULL, true, es);
 
 	/* Create textual dump of plan tree */
-	ExplainPrintPlan(es, queryDesc);
+	pgssp_ExplainPrintPlan(es, queryDesc);
 
 	if (es->summary && (planduration || bufusage))
 		ExplainOpenGroup("Planning", "Planning", true, es);
@@ -728,7 +748,7 @@ ExplainPrintSettings(ExplainState *es)
  * NB: will not work on utility statements
  */
 void
-ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
+pgssp_ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 {
 	Bitmapset  *rels_used = NULL;
 	PlanState  *ps;
@@ -737,10 +757,10 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	Assert(queryDesc->plannedstmt != NULL);
 	es->pstmt = queryDesc->plannedstmt;
 	es->rtable = queryDesc->plannedstmt->rtable;
-	ExplainPreScanNode(queryDesc->planstate, &rels_used);
-	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
-	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
-													es->rtable_names);
+//PLY	ExplainPreScanNode(queryDesc->planstate, &rels_used);
+//	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
+//	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
+//													es->rtable_names);
 	es->printed_subplans = NULL;
 
 	/*
@@ -758,7 +778,7 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 		ps = outerPlanState(ps);
 		es->hide_workers = true;
 	}
-	ExplainNode(ps, NIL, NULL, NULL, es);
+	pgssp_ExplainNode(ps, NIL, NULL, NULL, es);
 
 	/*
 	 * If requested, include information about GUC parameters with values that
@@ -1118,7 +1138,7 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
  * by ExplainOpenGroup/ExplainCloseGroup.
  */
 static void
-ExplainNode(PlanState *planstate, List *ancestors,
+pgssp_ExplainNode(PlanState *planstate, List *ancestors,
 			const char *relationship, const char *plan_name,
 			ExplainState *es)
 {
@@ -1699,6 +1719,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	/* quals, sort keys, etc */
+
+/* PLY keep only explain plan backbone, as column names are not available 
 	switch (nodeTag(plan))
 	{
 		case T_IndexScan:
@@ -1750,8 +1772,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_SampleScan:
 			show_tablesample(((SampleScan *) plan)->tablesample,
 							 planstate, ancestors, es);
-			/* fall through to print additional fields the same as SeqScan */
-			/* FALLTHROUGH */
 		case T_SeqScan:
 		case T_ValuesScan:
 		case T_CteScan:
@@ -1774,7 +1794,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				ExplainPropertyInteger("Workers Planned", NULL,
 									   gather->num_workers, es);
 
-				/* Show params evaluated at gather node */
 				if (gather->initParam)
 					show_eval_params(gather->initParam, es);
 
@@ -1802,7 +1821,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				ExplainPropertyInteger("Workers Planned", NULL,
 									   gm->num_workers, es);
 
-				/* Show params evaluated at gather-merge node */
 				if (gm->initParam)
 					show_eval_params(gm->initParam, es);
 
@@ -1828,7 +1846,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 					fexprs = lappend(fexprs, rtfunc->funcexpr);
 				}
-				/* We rely on show_expression to insert commas as needed */
 				show_expression((Node *) fexprs,
 								"Function Call", planstate, ancestors,
 								es->verbose, es);
@@ -1854,10 +1871,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_TidScan:
 			{
-				/*
-				 * The tidquals list has OR semantics, so be sure to show it
-				 * as an OR condition.
-				 */
 				List	   *tidquals = ((TidScan *) plan)->tidquals;
 
 				if (list_length(tidquals) > 1)
@@ -1972,6 +1985,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		default:
 			break;
 	}
+PLY */
 
 	/*
 	 * Prepare per-worker JIT instrumentation.  As with the overall JIT
@@ -2076,12 +2090,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 	/* lefttree */
 	if (outerPlanState(planstate))
-		ExplainNode(outerPlanState(planstate), ancestors,
+		pgssp_ExplainNode(outerPlanState(planstate), ancestors,
 					"Outer", NULL, es);
 
 	/* righttree */
 	if (innerPlanState(planstate))
-		ExplainNode(innerPlanState(planstate), ancestors,
+		pgssp_ExplainNode(innerPlanState(planstate), ancestors,
 					"Inner", NULL, es);
 
 	/* special child plans */
@@ -2113,7 +2127,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 							   ancestors, es);
 			break;
 		case T_SubqueryScan:
-			ExplainNode(((SubqueryScanState *) planstate)->subplan, ancestors,
+			pgssp_ExplainNode(((SubqueryScanState *) planstate)->subplan, ancestors,
 						"Subquery", NULL, es);
 			break;
 		case T_CustomScan:
@@ -3318,15 +3332,15 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 							   usage->temp_blks_read, es);
 		ExplainPropertyInteger("Temp Written Blocks", NULL,
 							   usage->temp_blks_written, es);
-		if (track_io_timing)
-		{
-			ExplainPropertyFloat("I/O Read Time", "ms",
-								 INSTR_TIME_GET_MILLISEC(usage->blk_read_time),
-								 3, es);
-			ExplainPropertyFloat("I/O Write Time", "ms",
-								 INSTR_TIME_GET_MILLISEC(usage->blk_write_time),
-								 3, es);
-		}
+//PLY		if (track_io_timing)
+//		{
+//			ExplainPropertyFloat("I/O Read Time", "ms",
+//								 INSTR_TIME_GET_MILLISEC(usage->blk_read_time),
+//								 3, es);
+//			ExplainPropertyFloat("I/O Write Time", "ms",
+//								 INSTR_TIME_GET_MILLISEC(usage->blk_write_time),
+//								 3, es);
+//		}
 	}
 }
 
@@ -3442,7 +3456,8 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 	char	   *refname;
 
 	rte = rt_fetch(rti, es->rtable);
-	refname = (char *) list_nth(es->rtable_names, rti - 1);
+//PLY	refname = (char *) list_nth(es->rtable_names, rti - 1);
+// modified because es->rtable_names not initialized any more for performances reason
 	if (refname == NULL)
 		refname = rte->eref->aliasname;
 
@@ -3722,7 +3737,7 @@ ExplainMemberNodes(PlanState **planstates, int nplans,
 	int			j;
 
 	for (j = 0; j < nplans; j++)
-		ExplainNode(planstates[j], ancestors,
+		pgssp_ExplainNode(planstates[j], ancestors,
 					"Member", NULL, es);
 }
 
@@ -3780,7 +3795,7 @@ ExplainSubPlans(List *plans, List *ancestors,
 		 */
 		ancestors = lcons(sp, ancestors);
 
-		ExplainNode(sps->planstate, ancestors,
+		pgssp_ExplainNode(sps->planstate, ancestors,
 					relationship, sp->plan_name, es);
 
 		ancestors = list_delete_first(ancestors);
@@ -3798,7 +3813,7 @@ ExplainCustomChildren(CustomScanState *css, List *ancestors, ExplainState *es)
 	(list_length(css->custom_ps) != 1 ? "children" : "child");
 
 	foreach(cell, css->custom_ps)
-		ExplainNode((PlanState *) lfirst(cell), ancestors, label, NULL, es);
+		pgssp_ExplainNode((PlanState *) lfirst(cell), ancestors, label, NULL, es);
 }
 
 /*
