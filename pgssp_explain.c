@@ -3,7 +3,7 @@
  * pgssp_explain.c
  *	  Explain query execution plans
  *
- * Modified version taken from pg13devel 2020-05 (before RC1) 
+ * Modified version taken from pg13Beta1 
  * that only gives the Backbone of textual explain plan, 
  * for better performances.
  *
@@ -3458,7 +3458,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 	rte = rt_fetch(rti, es->rtable);
 //PLY	refname = (char *) list_nth(es->rtable_names, rti - 1);
 // modified because es->rtable_names not initialized any more for performances reason
-	if (refname == NULL)
+//	if (refname == NULL)
 		refname = rte->eref->aliasname;
 
 	switch (nodeTag(plan))
