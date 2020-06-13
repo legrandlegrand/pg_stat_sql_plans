@@ -1439,6 +1439,7 @@ pgssp_store(const char *query, uint64 queryId,
 		}
 		else
 		{
+
 			/* this part comes from auto_explain
 			 * ExplainPrintPlan has been replaced by
 			 * ExplainOnePlan to be able to be calculated 
@@ -1508,13 +1509,35 @@ pgssp_store(const char *query, uint64 queryId,
 	{
 		Size		query_offset;
 		int			gc_count;
-		bool		stored;
+		bool		stored = false;
 		bool		do_gc;
 
+		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && planId != UINT64CONST(-1) && pgssp_explain)
+		{
+			/* add plan to query text */
+			char *query_with_plan;
+			query_with_plan = malloc(query_len + es->str->len + 1 + 1);
+			strcpy(query_with_plan, query);
+			strcat(query_with_plan, "\n");
+			strcat(query_with_plan, es->str->data);
+			query=query_with_plan;
+			query_len=strlen(query_with_plan);
+//			free(query_with_plan);
+		}
 
 		/* Append new query text to file with only shared lock held */
 		stored = qtext_store( query, query_len,
 							 &query_offset, &gc_count);
+
+//PLY   this generates many duplicated query texts in external file (on MSYS2)
+//		when tested with pgbench -c50 -t5 (a kind of query storm ...)
+//		In an ideal world: 
+//		- there should be no action between first hash_search and exclusive lock promotion, 
+//		- qtext_store should be executed AFTER hashtable entry creation, 
+//			outside exclusive lock
+//			query length and offset updated at the same time than counters
+//		In real life, keep it as is or remove it there (to run it under exclusive lock)
+//		that may fix initial issue, but reduce performances in the case of many distinct queries.
 
 		/*
 		 * Determine whether we need to garbage collect external query texts
@@ -1548,17 +1571,7 @@ pgssp_store(const char *query, uint64 queryId,
 		/* If needed, perform garbage collection while exclusive lock held */
 		if (do_gc)
 			gc_qtexts();
-
-		if (planId != UINT64CONST(0) && planId != UINT64CONST(1) && planId != UINT64CONST(-1) && pgssp_explain)
-		{
-			/*
-			 * Plan is only logged one time for each queryid / planId
-			 */
-			ereport(LOG,
-					(errmsg("qpid: %lld queryid: %lld planid: %lld plan:\n%s",
-						(long long)qpId, (long long)queryId, (long long)planId, es->str->data),
-					 errhidecontext(true), errhidestmt(true)));
-		}
+	
 	}
 
 	
