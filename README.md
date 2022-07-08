@@ -27,7 +27,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 # Prerequisites:
 	Postgres version >= 14 (see other branch for pg11-12 and pg13 compatiblility)
 	should be declared in postgresql.conf with shared_preload_libraries='pg_stat_sql_plans'
-	and compute_query_id = off (to bypass pg query_id computation
+	and compute_query_id = off (to bypass pg query_id computation)
 
 
 # View pg_stat_sql_plans definition:
@@ -60,7 +60,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 			0 for utility statement (Optimisable one's like "CREATE TABLE AS"
 			  have a planid calculated and an explain plan like any other query) 
 			1 when plan_type = 'none'
-			765585858645765476 when plan_type = 'mini' or 'standard'
+			765585858645765476 when plan_type = 'standard'
 
 
 	plans
