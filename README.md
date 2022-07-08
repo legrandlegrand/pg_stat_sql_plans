@@ -25,8 +25,9 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 
 # Prerequisites:
-	Postgres version >= 13 (see other branch for pg11 and 12 compatiblility)
+	Postgres version >= 14 (see other branch for pg11-12 and pg13 compatiblility)
 	should be declared in postgresql.conf with shared_preload_libraries='pg_stat_sql_plans'
+	and compute_query_id = off (to bypass pg query_id computation
 
 
 # View pg_stat_sql_plans definition:
@@ -135,9 +136,8 @@ Alpha version, DO NOT USE IN PRODUCTION
 
 	pg_stat_sql_plans.max 5000 (*)
 
-	pg_stat_sql_plans.plan_type mini (*), none, standard 
+	pg_stat_sql_plans.plan_type none, standard (*) 
 		none: plan is not considered, planid=1
-		mini (*): use a customized explain plan text (displaying only the plan "fishbone"), is faster
 		standard: use native explain with costs OFF, verbose OFF, can be slow
 
 	pg_stat_sql_plans.save true (*), false
@@ -175,7 +175,7 @@ Alpha version, DO NOT USE IN PRODUCTION
 		Also usefull for sampling wait events per queryid/planid, can be used to join
 		pg_stat_activity with pg_stat_sql_plans (see exemple)
 
-		returns 0 if no qpid found, -1 when trackin is diabled (pg_stat_sql_plans.track_pid = false)
+		returns 0 if no qpid found, -1 when trackin is disabled (pg_stat_sql_plans.track_pid = false)
 
 
 # Wait events:
