@@ -63,15 +63,13 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/spin.h"
+#include "storage/proc.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
-
-#include "pgssp_explain.h"
-
 
 
 PG_MODULE_MAGIC;
@@ -252,14 +250,12 @@ static const struct config_enum_entry track_options[] =
 typedef enum
 {
 	pgssp_PLAN_NONE,		/* track no plan*/
-	pgssp_PLAN_MINI,		/* track minimal explain plans */
 	pgssp_PLAN_STD			/* track explain plans (costs off) */
 }			pgsspPlanType;
 
 static const struct config_enum_entry plan_type_options[] =
 {
 	{"none", pgssp_PLAN_NONE, false},
-	{"mini", pgssp_PLAN_MINI, false},
 	{"standard", pgssp_PLAN_STD, false},
 	{NULL, 0, false}
 };
@@ -305,7 +301,8 @@ static PlannedStmt *pgssp_planner(Query *parse,
 				 const char *query_string,
 				 int cursorOptions,
  				 ParamListInfo boundParams);
-static void pgssp_post_parse_analyze(ParseState *pstate, Query *query);
+static void pgssp_post_parse_analyze(ParseState *pstate, Query *query,
+									JumbleState *jstate);
 static void pgssp_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void pgssp_ExecutorRun(QueryDesc *queryDesc,
 				 ScanDirection direction,
@@ -313,6 +310,7 @@ static void pgssp_ExecutorRun(QueryDesc *queryDesc,
 static void pgssp_ExecutorFinish(QueryDesc *queryDesc);
 static void pgssp_ExecutorEnd(QueryDesc *queryDesc);
 static void pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+					bool readOnlyTree,
 					ProcessUtilityContext context, ParamListInfo params,
 					QueryEnvironment *queryEnv,
 					DestReceiver *dest, QueryCompletion *qc);
@@ -414,7 +412,7 @@ _PG_init(void)
 							 "Selects which type of explain plan is used by pg_stat_sql_plans.",
 							 NULL,
 							 &pgssp_plan_type,
-							 pgssp_PLAN_MINI,
+							 pgssp_PLAN_STD,
 							 plan_type_options,
 							 PGC_SUSET,
 							 0,
@@ -852,10 +850,10 @@ get_max_procs_count(void)
  * Post-parse-analysis hook: mark query with a queryId
  */
 static void
-pgssp_post_parse_analyze(ParseState *pstate, Query *query)
+pgssp_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 {
 	if (prev_post_parse_analyze_hook)
-		prev_post_parse_analyze_hook(pstate, query);
+		prev_post_parse_analyze_hook(pstate, query, jstate);
 
 	/* Assert we didn't do this already */
 	Assert(query->queryId == UINT64CONST(0));
@@ -1057,7 +1055,7 @@ pgssp_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			MemoryContext oldcxt;
 
 			oldcxt = MemoryContextSwitchTo(queryDesc->estate->es_query_cxt);
-			queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_ALL);
+			queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_ALL, false);
 			MemoryContextSwitchTo(oldcxt);
 		}
 	}
@@ -1171,6 +1169,7 @@ pgssp_ExecutorEnd(QueryDesc *queryDesc)
  */
 static void
 pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+					bool readOnlyTree,
 					ProcessUtilityContext context,
 					ParamListInfo params, QueryEnvironment *queryEnv,
 					DestReceiver *dest, QueryCompletion *qc)
@@ -1217,11 +1216,11 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		PG_TRY();
 		{
 			if (prev_ProcessUtility)
-				prev_ProcessUtility(pstmt, queryString,
+				prev_ProcessUtility(pstmt, queryString, readOnlyTree,
 									context, params, queryEnv,
 									dest, qc);
 			else
-				standard_ProcessUtility(pstmt, queryString,
+				standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 										context, params, queryEnv,
 										dest, qc);
 			nested_level--;
@@ -1327,11 +1326,11 @@ pgssp_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	else
 	{
 		if (prev_ProcessUtility)
-			prev_ProcessUtility(pstmt, queryString,
+			prev_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv,
 								dest, qc);
 		else
-			standard_ProcessUtility(pstmt, queryString,
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 									context, params, queryEnv,
 									dest, qc);
 	}
@@ -1464,11 +1463,6 @@ pgssp_store(const char *query, uint64 queryId,
 				ExplainOnePlan(plan, NULL, es, query, params,
 							NULL, NULL, NULL);
 
-			if (pgssp_plan_type == pgssp_PLAN_MINI )
-				pgssp_ExplainOnePlan(plan, NULL, es, query, params,
-							NULL, NULL, NULL);
-
-
 //			if (es->analyze && auto_explain_log_triggers)
 //				ExplainPrintTriggers(es, queryDesc);
 			ExplainEndOutput(es);
@@ -1479,9 +1473,6 @@ pgssp_store(const char *query, uint64 queryId,
 
 			if (pgssp_plan_type == pgssp_PLAN_STD )
 				planId = hash_query(es->str->data);
-
-			if (pgssp_plan_type == pgssp_PLAN_MINI )
-				planId = pgssp_hash_string(es->str->data, es->str->len);
 
 			/* alter queryid value to reflect planid */
 			qpId = hash_combine64(queryId,planId);
@@ -1746,7 +1737,7 @@ pg_stat_sql_plans_internal(FunctionCallInfo fcinfo,
 	pgsspEntry  *entry;
 
 	/* Superusers or members of pg_read_all_stats members are allowed */
-    is_allowed_role = is_member_of_role(GetUserId(), DEFAULT_ROLE_READ_ALL_STATS);
+    is_allowed_role = is_member_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS);
 
 	/* hash table must exist already */
 	if (!pgssp || !pgssp_hash)

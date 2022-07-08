@@ -1,7 +1,7 @@
 # contrib/pg_stat_sql_plans/Makefile
 
 MODULE_big = pg_stat_sql_plans
-OBJS = pg_stat_sql_plans.o pgssp_explain.o $(WIN32RES)
+OBJS = pg_stat_sql_plans.o $(WIN32RES)
 
 EXTENSION = pg_stat_sql_plans
 DATA = pg_stat_sql_plans--0.2.sql
