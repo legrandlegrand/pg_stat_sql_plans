@@ -218,6 +218,7 @@ static int	nested_level = 0;
 
 /* Saved hook values in case of unload */
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static planner_hook_type prev_planner_hook = NULL;
 static post_parse_analyze_hook_type prev_post_parse_analyze_hook = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
@@ -297,6 +298,7 @@ PG_FUNCTION_INFO_V1(pgssp_backend_qpid);
 
 static void pgssp_shmem_startup(void);
 static void pgssp_shmem_shutdown(int code, Datum arg);
+static void pgssp_shmem_request(void);
 static PlannedStmt *pgssp_planner(Query *parse, 
 				 const char *query_string,
 				 int cursorOptions,
@@ -460,8 +462,9 @@ _PG_init(void)
 	 * the postmaster process.)  We'll allocate or attach to the shared
 	 * resources in pgssp_shmem_startup().
 	 */
-	RequestAddinShmemSpace(pgssp_memsize());
-	RequestNamedLWLockTranche("pg_stat_sql_plans", 1);
+
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = pgssp_shmem_request;
 
 	/*
 	 * Install hooks.
@@ -844,6 +847,14 @@ get_max_procs_count(void)
 	count += max_prepared_xacts;
 
 	return count;
+}
+
+static void pgssp_shmem_request(void) {
+  if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
+	RequestAddinShmemSpace(pgssp_memsize());
+	RequestNamedLWLockTranche("pg_stat_sql_plans", 1);
 }
 
 /*
